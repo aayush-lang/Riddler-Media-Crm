@@ -1,4 +1,5 @@
 import { SUPABASE_URL, SUPABASE_ANON_KEY, RESEND_API_KEY, FROM_EMAIL } from './supabase.js';
+import { initBriefs } from './briefs.js';
 
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -14,12 +15,14 @@ const STAGE_COLORS = {
 };
 
 let state = {
-  user:null,profile:null,profiles:[],leads:[],filteredLeads:[],reminders:[],
+  user:null,profile:null,profiles:[],leads:[],filteredLeads:[],reminders:[],briefs:[],
   config:{services:[],sources:SOURCES,stages:STAGES},
   page:1,pageSize:20,sortCol:'created_at',sortDir:'desc',
   selectedLeads:new Set(),currentReminderFilter:'pending',
   editLeadId:null,editReminderId:null,activeView:'dashboard',filterDebounce:null,
 };
+
+let briefsModule = null;
 
 async function handleLogin() {
   const email=document.getElementById('login-email').value.trim();
@@ -50,6 +53,14 @@ async function initApp(user) {
   document.getElementById('app').style.display='flex';
   await Promise.all([loadConfig(),loadProfiles(),loadLeads(),loadReminders()]);
   renderDashboard();renderLeads();renderReminders();
+
+  // Init briefs module
+  briefsModule = initBriefs(db, state, esc, formatDate);
+  await briefsModule.loadBriefs();
+  briefsModule.renderBriefs();
+  const isPublic = await briefsModule.checkPublicShare();
+  if(isPublic) return;
+
   document.querySelectorAll('.nav-btn').forEach(btn=>{btn.addEventListener('click',()=>switchView(btn.dataset.view,btn));});
   document.querySelectorAll('th.sortable').forEach(th=>{th.addEventListener('click',()=>handleSort(th.dataset.col));});
   document.getElementById('dash-date').textContent=new Date().toLocaleDateString('en-IN',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
@@ -95,6 +106,7 @@ function switchView(viewName,btn){
   document.getElementById(`view-${viewName}`)?.classList.add('active');
   btn?.classList.add('active');state.activeView=viewName;
   if(viewName==='pipeline')renderKanban();
+  if(viewName==='briefs'){briefsModule?.renderBriefs();}
   if(viewName==='settings'){loadProfiles().then(()=>populateAssignedSelects());}
 }
 
@@ -145,7 +157,7 @@ function renderLeads(){
   const fl=state.filteredLeads;const total=fl.length;
   const pages=Math.max(1,Math.ceil(total/state.pageSize));
   const start=(state.page-1)*state.pageSize;const slice=fl.slice(start,start+state.pageSize);
-  document.getElementById('leads-count-label').textContent=`${total.toLocaleString('en-IN')} leads${total!==state.leads.length?` (filtered from ${state.leads.length.toLocaleString('en-IN')})`:''}`;
+  document.getElementById('leads-count-label').textContent=`${total.toLocaleString('en-IN')} leads${total!==state.leads.length?` (filtered from ${state.leads.length.toLocaleString('en-IN')})`:''}`; 
   const tbody=document.getElementById('leads-tbody');
   if(!slice.length){tbody.innerHTML=`<tr><td colspan="11" class="empty-row"><div class="empty-state-icon">🔍</div><div>No leads found</div></td></tr>`;}
   else{
@@ -290,6 +302,7 @@ async function openLeadDetail(id){
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn-sm" onclick="openEditLead('${l.id}');document.getElementById('lead-detail-overlay').style.display='none'">Edit lead</button>
         <button class="btn-sm" onclick="openReminderForLead('${l.id}')">+ Reminder</button>
+        <button class="btn-sm" onclick="openBriefModal('${l.id}',true)">+ Brief</button>
         <button class="btn-danger-sm" onclick="deleteLead('${l.id}')">Delete</button>
       </div>
     </div>
