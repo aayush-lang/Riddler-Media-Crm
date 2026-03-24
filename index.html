@@ -49,6 +49,7 @@
           <button class="nav-btn active" data-view="dashboard">Dashboard</button>
           <button class="nav-btn" data-view="leads">Leads</button>
           <button class="nav-btn" data-view="pipeline">Pipeline</button>
+          <button class="nav-btn" data-view="briefs">Briefs</button>
           <button class="nav-btn" data-view="reminders">Reminders <span class="nav-badge" id="reminder-count" style="display:none">0</span></button>
           <button class="nav-btn" data-view="settings">Settings</button>
         </nav>
@@ -89,7 +90,7 @@
         </div>
         <div class="filter-bar">
           <input class="search-input" type="search" id="search-q" placeholder="Search name, company, email, phone…" oninput="debounceFilter()" />
-          <select id="f-stage" class="filter-sel" onchange="applyFilters()"><option value="">All stages</option><option>Lead</option><option>Contacted</option><option>Pitched</option><option>Negotiation</option><option>Won</option><option>Lost</option></select>
+          <select id="f-stage" class="filter-sel" onchange="applyFilters()"><option value="">All stages</option></select>
           <select id="f-type" class="filter-sel" onchange="applyFilters()"><option value="">All types</option><option>Prospect</option><option>Client</option></select>
           <select id="f-service" class="filter-sel" onchange="applyFilters()"><option value="">All services</option></select>
           <select id="f-source" class="filter-sel" onchange="applyFilters()"><option value="">All sources</option></select>
@@ -109,15 +110,21 @@
                 <th class="sortable" data-col="value">Value</th>
                 <th>Assigned</th>
                 <th class="sortable" data-col="followup_date">Follow-up</th>
+                <th class="sortable" data-col="created_at">Created on</th>
                 <th></th>
               </tr>
             </thead>
-            <tbody id="leads-tbody"><tr><td colspan="10" class="empty-row"><div class="loader"></div></td></tr></tbody>
+            <tbody id="leads-tbody"><tr><td colspan="11" class="empty-row"><div class="loader"></div></td></tr></tbody>
           </table>
           <div class="table-footer">
             <div class="bulk-actions" id="bulk-actions" style="display:none">
               <span id="selected-count">0 selected</span>
-              <select id="bulk-stage" class="filter-sel"><option value="">Move to stage…</option><option>Lead</option><option>Contacted</option><option>Pitched</option><option>Negotiation</option><option>Won</option><option>Lost</option></select>
+              <select id="bulk-stage" class="filter-sel">
+                <option value="">Move to stage…</option>
+                <option>Fresh Lead</option><option>Contacted</option><option>Interested</option>
+                <option>Brief Expected</option><option>Brief Received</option><option>Plan Shared</option>
+                <option>Closed</option><option>Not Interested</option><option>In House Team</option>
+              </select>
               <button class="btn-secondary" onclick="bulkMoveStage()">Apply</button>
               <button class="btn-danger-sm" onclick="bulkDelete()">Delete selected</button>
             </div>
@@ -129,6 +136,14 @@
       <section class="view" id="view-pipeline">
         <div class="view-header"><h2 class="view-title">Pipeline Board</h2><button class="btn-primary" onclick="openModal('add-lead-modal')">+ Add lead</button></div>
         <div class="kanban-board" id="kanban-board"></div>
+      </section>
+
+      <section class="view" id="view-briefs">
+        <div class="view-header">
+          <h2 class="view-title">Briefs</h2>
+          <button class="btn-primary" onclick="openBriefModal(null)">+ New brief</button>
+        </div>
+        <div id="briefs-list" class="briefs-list"></div>
       </section>
 
       <section class="view" id="view-reminders">
@@ -153,6 +168,7 @@
     </main>
   </div>
 
+  <!-- Add / Edit Lead -->
   <div class="modal-overlay" id="add-lead-modal" onclick="overlayClose(event,this)" style="display:none">
     <div class="modal modal-lg">
       <div class="modal-header"><h3 id="lead-modal-title">Add new lead</h3><button class="modal-close" onclick="closeModal('add-lead-modal')">✕</button></div>
@@ -163,7 +179,7 @@
           <div class="form-field"><label>Company</label><input id="lf-company" /></div>
           <div class="form-field"><label>Email</label><input id="lf-email" type="email" /></div>
           <div class="form-field"><label>Phone</label><input id="lf-phone" type="tel" /></div>
-          <div class="form-field"><label>Stage</label><select id="lf-stage"><option>Lead</option><option>Contacted</option><option>Pitched</option><option>Negotiation</option><option>Won</option><option>Lost</option></select></div>
+          <div class="form-field"><label>Stage</label><select id="lf-stage"></select></div>
           <div class="form-field"><label>Type</label><select id="lf-type"><option>Prospect</option><option>Client</option></select></div>
           <div class="form-field"><label>Service interest</label><select id="lf-service"><option value=""></option></select></div>
           <div class="form-field"><label>Lead source</label><select id="lf-source"><option value=""></option></select></div>
@@ -178,10 +194,26 @@
     </div>
   </div>
 
+  <!-- Lead Detail Panel -->
   <div class="side-panel-overlay" id="lead-detail-overlay" onclick="overlayClose(event,this)" style="display:none">
     <div class="side-panel" id="lead-detail-panel"></div>
   </div>
 
+  <!-- Brief Modal -->
+  <div class="modal-overlay" id="brief-modal" onclick="overlayClose(event,this)" style="display:none">
+    <div class="modal modal-xl">
+      <div class="modal-header"><h3 id="brief-modal-title">New Brief</h3><button class="modal-close" onclick="closeModal('brief-modal')">✕</button></div>
+      <div class="modal-body" id="brief-modal-body"></div>
+      <div class="modal-footer"><button class="btn-ghost" onclick="closeModal('brief-modal')">Cancel</button><button class="btn-primary" onclick="saveBrief()">Save brief</button></div>
+    </div>
+  </div>
+
+  <!-- Brief View Panel -->
+  <div class="side-panel-overlay" id="brief-view-overlay" onclick="overlayClose(event,this)" style="display:none">
+    <div class="side-panel" style="width:600px;max-width:95vw" id="brief-view-panel"></div>
+  </div>
+
+  <!-- Add Reminder -->
   <div class="modal-overlay" id="add-reminder-modal" onclick="overlayClose(event,this)" style="display:none">
     <div class="modal modal-sm">
       <div class="modal-header"><h3 id="reminder-modal-title">Add reminder</h3><button class="modal-close" onclick="closeModal('add-reminder-modal')">✕</button></div>
@@ -200,6 +232,7 @@
     </div>
   </div>
 
+  <!-- Reminder Toast -->
   <div class="reminder-toast" id="reminder-toast" style="display:none">
     <div class="toast-icon">🔔</div>
     <div class="toast-body"><div class="toast-title" id="toast-title">Reminder</div><div class="toast-sub" id="toast-sub"></div></div>
@@ -208,6 +241,7 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
   <script src="app.js" type="module"></script>
 </body>
 </html>
