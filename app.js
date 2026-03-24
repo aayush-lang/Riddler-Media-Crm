@@ -365,7 +365,77 @@ function snoozeReminder(){if(!currentPopupReminder)return;const snooze=new Date(
 async function sendReminderEmail(reminder,lead){if(!RESEND_API_KEY||RESEND_API_KEY==='YOUR_RESEND_API_KEY')return;const assignee=state.profiles.find(p=>p.id===reminder.assigned_to);if(!assignee?.email)return;const body=`<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px"><div style="background:#4F46E5;color:white;padding:16px 24px;border-radius:8px 8px 0 0"><strong>Riddler CRM</strong> · Reminder</div><div style="background:#f8f7ff;padding:24px;border-radius:0 0 8px 8px;border:1px solid #e5e7eb"><h2 style="margin:0 0 12px;color:#1e1b4b">${reminder.title}</h2>${lead?`<p style="color:#4b5563"><strong>Lead:</strong> ${lead.name}${lead.company?` (${lead.company})`:''}</p>`:''}${reminder.notes?`<p style="color:#4b5563"><strong>Notes:</strong> ${reminder.notes}</p>`:''}<p style="color:#9ca3af;font-size:12px;margin-top:16px">Due: ${formatDate(reminder.due_date)} at ${reminder.due_time}</p><a href="https://aayush-lang.github.io/Riddler-Media-Crm" style="display:inline-block;margin-top:16px;background:#4F46E5;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;font-size:13px">Open CRM</a></div></div>`;await fetch('https://api.resend.com/emails',{method:'POST',headers:{'Authorization':`Bearer ${RESEND_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({from:FROM_EMAIL,to:[assignee.email],subject:`🔔 Reminder: ${reminder.title}`,html:body})});}
 
 function exportCSV(){const headers=['Name','Company','Email','Phone','Stage','Type','Service','Source','Value','City','Follow-up Date','Created On','Notes'];const rows=state.leads.map(l=>[l.name,l.company,l.email,l.phone,l.stage,l.type,l.service,l.source,l.value,l.city,l.followup_date,l.created_at?.split('T')[0],l.notes].map(v=>`"${(v||'').toString().replace(/"/g,'""')}"`).join(','));const csv=[headers.join(','),...rows].join('\n');const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);a.download=`riddler_leads_${new Date().toISOString().split('T')[0]}.csv`;a.click();}
-function importCSV(event){const file=event.target.files[0];if(!file)return;const reader=new FileReader();reader.onload=async e=>{const lines=e.target.result.split('\n').filter(Boolean);const headers=lines[0].split(',').map(h=>h.replace(/"/g,'').toLowerCase().trim());const fieldMap={name:['name','full name','contact name'],company:['company','business','company name'],email:['email','email address'],phone:['phone','mobile','contact number'],stage:['stage'],type:['type'],service:['service','service interest'],source:['source','lead source'],value:['value','deal value','amount'],city:['city','location']};const colIndex={};Object.entries(fieldMap).forEach(([key,aliases])=>{const idx=headers.findIndex(h=>aliases.includes(h));if(idx!==-1)colIndex[key]=idx;});const rows=lines.slice(1).map(line=>{const cells=line.match(/(\".*?\"|[^,]+)/g)?.map(c=>c.replace(/^"|"$/g,'').trim())||[];return cells;});const toInsert=rows.filter(r=>r.length>1&&r[colIndex.name||0]).map(r=>({name:r[colIndex.name]||'Unknown',company:r[colIndex.company]||'',email:r[colIndex.email]||'',phone:r[colIndex.phone]||'',stage:r[colIndex.stage]||'Fresh Lead',type:r[colIndex.type]||'Prospect',service:r[colIndex.service]||'',source:r[colIndex.source]||'',value:+(r[colIndex.value]||0)||0,city:r[colIndex.city]||'',created_by:state.user.id}));if(!toInsert.length){alert('No valid rows found in CSV.');return;}if(!confirm(`Import ${toInsert.length} leads?`))return;for(let i=0;i<toInsert.length;i+=500){await db.from('leads').insert(toInsert.slice(i,i+500));}await loadLeads();renderLeads();renderDashboard();alert(`✓ Imported ${toInsert.length} leads successfully!`);};reader.readAsText(file);event.target.value='';}
+
+// ── FIXED importCSV ──
+function importCSV(event){
+  const file=event.target.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=async e=>{
+    const lines=e.target.result.split('\n').filter(l=>l.trim());
+    const headers=lines[0].split(',').map(h=>h.replace(/"/g,'').toLowerCase().trim());
+    const fieldMap={
+      name:['name','full name','contact name'],
+      company:['company','business','company name'],
+      email:['email','email address'],
+      phone:['phone','mobile','contact number'],
+      stage:['stage'],
+      type:['type'],
+      service:['service','service interest'],
+      source:['source','lead source'],
+      value:['value','deal value','amount'],
+      city:['city','location']
+    };
+    const colIndex={};
+    Object.entries(fieldMap).forEach(([key,aliases])=>{
+      const idx=headers.findIndex(h=>aliases.includes(h));
+      if(idx!==-1)colIndex[key]=idx;
+    });
+    const rows=lines.slice(1).map(line=>{
+      const cells=line.match(/("([^"]|"")*"|[^,]*)/g)?.map(c=>c.replace(/^"|"$/g,'').replace(/""/g,'"').trim())||[];
+      return cells;
+    });
+    const now=new Date().toISOString();
+    const toInsert=rows
+      .filter(r=>r.length>=1&&r[colIndex.name??0]?.trim())
+      .map(r=>({
+        name:(r[colIndex.name]||'Unknown').trim(),
+        company:(r[colIndex.company]!=null?r[colIndex.company]:'').trim(),
+        email:(r[colIndex.email]!=null?r[colIndex.email]:'').trim(),
+        phone:(r[colIndex.phone]!=null?r[colIndex.phone]:'').trim(),
+        stage:STAGES.includes((r[colIndex.stage]||'').trim())?(r[colIndex.stage]||'').trim():'Fresh Lead',
+        type:(r[colIndex.type]||'').trim()==='Client'?'Client':'Prospect',
+        service:(r[colIndex.service]!=null?r[colIndex.service]:'').trim(),
+        source:(r[colIndex.source]!=null?r[colIndex.source]:'').trim(),
+        value:+(r[colIndex.value]||0)||0,
+        city:(r[colIndex.city]!=null?r[colIndex.city]:'').trim(),
+        created_by:state.user.id,
+        updated_at:now,
+      }));
+    if(!toInsert.length){alert('No valid rows found in CSV.');return;}
+    if(!confirm(`Import ${toInsert.length} leads?`))return;
+    let imported=0;
+    let errors=0;
+    for(let i=0;i<toInsert.length;i+=100){
+      const batch=toInsert.slice(i,i+100);
+      const{error}=await db.from('leads').insert(batch);
+      if(error){
+        console.error(`Batch ${Math.floor(i/100)+1} error:`,error);
+        errors+=batch.length;
+      }else{
+        imported+=batch.length;
+      }
+    }
+    await loadLeads();renderLeads();renderDashboard();
+    if(errors>0){
+      alert(`Imported ${imported} leads successfully.\n${errors} rows failed — open Console for details.`);
+    }else{
+      alert(`✓ Imported ${imported} leads successfully!`);
+    }
+  };
+  reader.readAsText(file);
+  event.target.value='';
+}
+
 async function inviteTeamMember(){const email=document.getElementById('invite-email').value.trim();if(!email)return;alert(`Create their account from Supabase dashboard → Auth → Users → Invite user.\n\nEmail: ${email}`);document.getElementById('invite-email').value='';}
 
 function esc(str){return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
