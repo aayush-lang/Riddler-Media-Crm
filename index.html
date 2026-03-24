@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Riddler CRM</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <div id="auth-screen">
+    <div class="auth-wrap">
+      <div class="auth-card">
+        <div class="auth-brand">
+          <span class="brand-dot"></span>
+          <span class="brand-text"><strong>Riddler</strong> CRM</span>
+        </div>
+        <h1 class="auth-title">Welcome back</h1>
+        <p class="auth-sub">Sign in to your workspace</p>
+        <div id="auth-error" class="auth-error" style="display:none"></div>
+        <div class="field-group">
+          <label>Email</label>
+          <input type="email" id="login-email" placeholder="you@riddlermedia.in" autocomplete="email" />
+        </div>
+        <div class="field-group">
+          <label>Password</label>
+          <input type="password" id="login-pw" placeholder="••••••••" autocomplete="current-password" />
+        </div>
+        <button class="btn-auth" id="login-btn" onclick="handleLogin()">Sign in</button>
+        <div class="auth-footer">
+          Riddler Media · Internal tool · <a href="#" onclick="showForgot()">Forgot password?</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="app" style="display:none">
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="brand-mark">
+          <span class="brand-dot sm"></span>
+          <span><strong>Riddler</strong> CRM</span>
+        </div>
+        <nav id="main-nav">
+          <button class="nav-btn active" data-view="dashboard">Dashboard</button>
+          <button class="nav-btn" data-view="leads">Leads</button>
+          <button class="nav-btn" data-view="pipeline">Pipeline</button>
+          <button class="nav-btn" data-view="reminders">Reminders <span class="nav-badge" id="reminder-count" style="display:none">0</span></button>
+          <button class="nav-btn" data-view="settings">Settings</button>
+        </nav>
+      </div>
+      <div class="topbar-right">
+        <div class="user-chip" id="user-chip">
+          <div class="user-avatar" id="user-avatar">AM</div>
+          <span id="user-name">Aayush</span>
+          <button class="logout-btn" onclick="handleLogout()" title="Sign out">↩</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <section class="view active" id="view-dashboard">
+        <div class="view-header">
+          <div><h2 class="view-title">Dashboard</h2><p class="view-sub" id="dash-date"></p></div>
+          <button class="btn-primary" onclick="openModal('add-lead-modal')">+ Add lead</button>
+        </div>
+        <div class="metrics-row" id="metrics-row"></div>
+        <div class="dash-grid">
+          <div class="dash-card"><div class="dash-card-title">Pipeline by stage</div><div id="stage-bars"></div></div>
+          <div class="dash-card"><div class="dash-card-title">Lead sources</div><div id="source-chart"></div></div>
+          <div class="dash-card"><div class="dash-card-title">Follow-ups due today</div><div id="followups-today"></div></div>
+          <div class="dash-card"><div class="dash-card-title">Team performance</div><div id="team-perf"></div></div>
+        </div>
+      </section>
+
+      <section class="view" id="view-leads">
+        <div class="view-header">
+          <div><h2 class="view-title">All Leads</h2><p class="view-sub" id="leads-count-label"></p></div>
+          <div style="display:flex;gap:8px">
+            <button class="btn-secondary" onclick="document.getElementById('csv-import').click()">↑ Import CSV</button>
+            <input type="file" id="csv-import" accept=".csv" style="display:none" onchange="importCSV(event)" />
+            <button class="btn-secondary" onclick="exportCSV()">↓ Export CSV</button>
+            <button class="btn-primary" onclick="openModal('add-lead-modal')">+ Add lead</button>
+          </div>
+        </div>
+        <div class="filter-bar">
+          <input class="search-input" type="search" id="search-q" placeholder="Search name, company, email, phone…" oninput="debounceFilter()" />
+          <select id="f-stage" class="filter-sel" onchange="applyFilters()"><option value="">All stages</option><option>Lead</option><option>Contacted</option><option>Pitched</option><option>Negotiation</option><option>Won</option><option>Lost</option></select>
+          <select id="f-type" class="filter-sel" onchange="applyFilters()"><option value="">All types</option><option>Prospect</option><option>Client</option></select>
+          <select id="f-service" class="filter-sel" onchange="applyFilters()"><option value="">All services</option></select>
+          <select id="f-source" class="filter-sel" onchange="applyFilters()"><option value="">All sources</option></select>
+          <select id="f-assigned" class="filter-sel" onchange="applyFilters()"><option value="">All members</option></select>
+          <button class="btn-ghost" onclick="clearFilters()">Clear</button>
+        </div>
+        <div class="table-container">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)" /></th>
+                <th class="sortable" data-col="name">Name / Company</th>
+                <th class="sortable" data-col="email">Contact</th>
+                <th class="sortable" data-col="stage">Stage</th>
+                <th>Service</th>
+                <th class="sortable" data-col="source">Source</th>
+                <th class="sortable" data-col="value">Value</th>
+                <th>Assigned</th>
+                <th class="sortable" data-col="followup_date">Follow-up</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="leads-tbody"><tr><td colspan="10" class="empty-row"><div class="loader"></div></td></tr></tbody>
+          </table>
+          <div class="table-footer">
+            <div class="bulk-actions" id="bulk-actions" style="display:none">
+              <span id="selected-count">0 selected</span>
+              <select id="bulk-stage" class="filter-sel"><option value="">Move to stage…</option><option>Lead</option><option>Contacted</option><option>Pitched</option><option>Negotiation</option><option>Won</option><option>Lost</option></select>
+              <button class="btn-secondary" onclick="bulkMoveStage()">Apply</button>
+              <button class="btn-danger-sm" onclick="bulkDelete()">Delete selected</button>
+            </div>
+            <div class="pagination" id="pagination"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view" id="view-pipeline">
+        <div class="view-header"><h2 class="view-title">Pipeline Board</h2><button class="btn-primary" onclick="openModal('add-lead-modal')">+ Add lead</button></div>
+        <div class="kanban-board" id="kanban-board"></div>
+      </section>
+
+      <section class="view" id="view-reminders">
+        <div class="view-header"><h2 class="view-title">Reminders</h2><button class="btn-primary" onclick="openModal('add-reminder-modal')">+ Add reminder</button></div>
+        <div class="reminder-tabs">
+          <button class="rem-tab active" data-filter="pending">Pending</button>
+          <button class="rem-tab" data-filter="today">Today</button>
+          <button class="rem-tab" data-filter="overdue">Overdue</button>
+          <button class="rem-tab" data-filter="done">Done</button>
+        </div>
+        <div id="reminders-list" class="reminders-list"></div>
+      </section>
+
+      <section class="view" id="view-settings">
+        <div class="view-header"><h2 class="view-title">Settings</h2></div>
+        <div class="settings-grid">
+          <div class="settings-card"><div class="settings-card-title">Team members</div><div id="team-list"></div><div style="margin-top:1rem;display:flex;gap:8px"><input class="search-input" id="invite-email" placeholder="colleague@riddlermedia.in" style="flex:1" /><button class="btn-primary" onclick="inviteTeamMember()">Invite</button></div></div>
+          <div class="settings-card"><div class="settings-card-title">Services</div><div id="services-list"></div></div>
+          <div class="settings-card"><div class="settings-card-title">Lead sources</div><div id="sources-list"></div></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-overlay" id="add-lead-modal" onclick="overlayClose(event,this)">
+    <div class="modal modal-lg">
+      <div class="modal-header"><h3 id="lead-modal-title">Add new lead</h3><button class="modal-close" onclick="closeModal('add-lead-modal')">✕</button></div>
+      <div class="modal-body">
+        <input type="hidden" id="edit-lead-id" />
+        <div class="form-grid">
+          <div class="form-field"><label>Full name *</label><input id="lf-name" /></div>
+          <div class="form-field"><label>Company</label><input id="lf-company" /></div>
+          <div class="form-field"><label>Email</label><input id="lf-email" type="email" /></div>
+          <div class="form-field"><label>Phone</label><input id="lf-phone" type="tel" /></div>
+          <div class="form-field"><label>Stage</label><select id="lf-stage"><option>Lead</option><option>Contacted</option><option>Pitched</option><option>Negotiation</option><option>Won</option><option>Lost</option></select></div>
+          <div class="form-field"><label>Type</label><select id="lf-type"><option>Prospect</option><option>Client</option></select></div>
+          <div class="form-field"><label>Service interest</label><select id="lf-service"><option value=""></option></select></div>
+          <div class="form-field"><label>Lead source</label><select id="lf-source"><option value=""></option></select></div>
+          <div class="form-field"><label>Deal value (₹)</label><input id="lf-value" type="number" min="0" /></div>
+          <div class="form-field"><label>City</label><input id="lf-city" /></div>
+          <div class="form-field"><label>Follow-up date</label><input id="lf-followup" type="date" /></div>
+          <div class="form-field"><label>Assigned to</label><select id="lf-assigned"><option value=""></option></select></div>
+          <div class="form-field full"><label>Notes</label><textarea id="lf-notes" rows="3"></textarea></div>
+        </div>
+      </div>
+      <div class="modal-footer"><button class="btn-ghost" onclick="closeModal('add-lead-modal')">Cancel</button><button class="btn-primary" onclick="saveLead()">Save lead</button></div>
+    </div>
+  </div>
+
+  <div class="side-panel-overlay" id="lead-detail-overlay" onclick="overlayClose(event,this)">
+    <div class="side-panel" id="lead-detail-panel"></div>
+  </div>
+
+  <div class="modal-overlay" id="add-reminder-modal" onclick="overlayClose(event,this)">
+    <div class="modal modal-sm">
+      <div class="modal-header"><h3 id="reminder-modal-title">Add reminder</h3><button class="modal-close" onclick="closeModal('add-reminder-modal')">✕</button></div>
+      <div class="modal-body">
+        <input type="hidden" id="edit-reminder-id" />
+        <div class="form-grid">
+          <div class="form-field full"><label>Title *</label><input id="rf-title" placeholder="Follow up with…" /></div>
+          <div class="form-field full"><label>Linked lead</label><select id="rf-lead"><option value="">— none —</option></select></div>
+          <div class="form-field full"><label>Assigned to</label><select id="rf-assigned"><option value=""></option></select></div>
+          <div class="form-field"><label>Date *</label><input id="rf-date" type="date" /></div>
+          <div class="form-field"><label>Time</label><input id="rf-time" type="time" value="10:00" /></div>
+          <div class="form-field full"><label>Notes</label><textarea id="rf-notes" rows="2"></textarea></div>
+        </div>
+      </div>
+      <div class="modal-footer"><button class="btn-ghost" onclick="closeModal('add-reminder-modal')">Cancel</button><button class="btn-primary" onclick="saveReminder()">Save reminder</button></div>
+    </div>
+  </div>
+
+  <div class="reminder-toast" id="reminder-toast" style="display:none">
+    <div class="toast-icon">🔔</div>
+    <div class="toast-body"><div class="toast-title" id="toast-title">Reminder</div><div class="toast-sub" id="toast-sub"></div></div>
+    <div class="toast-actions"><button onclick="snoozeReminder()">Snooze 1h</button><button class="done" onclick="doneReminderToast()">Done</button></div>
+    <button class="toast-close" onclick="closeToast()">✕</button>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <script src="app.js" type="module"></script>
+</body>
+</html>
