@@ -54,7 +54,6 @@ async function initApp(user) {
   await Promise.all([loadConfig(),loadProfiles(),loadLeads(),loadReminders()]);
   renderDashboard();renderLeads();renderReminders();
 
-  // Init briefs module
   briefsModule = initBriefs(db, state, esc, formatDate);
   await briefsModule.loadBriefs();
   briefsModule.renderBriefs();
@@ -366,7 +365,6 @@ async function sendReminderEmail(reminder,lead){if(!RESEND_API_KEY||RESEND_API_K
 
 function exportCSV(){const headers=['Name','Company','Email','Phone','Stage','Type','Service','Source','Value','City','Follow-up Date','Created On','Notes'];const rows=state.leads.map(l=>[l.name,l.company,l.email,l.phone,l.stage,l.type,l.service,l.source,l.value,l.city,l.followup_date,l.created_at?.split('T')[0],l.notes].map(v=>`"${(v||'').toString().replace(/"/g,'""')}"`).join(','));const csv=[headers.join(','),...rows].join('\n');const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);a.download=`riddler_leads_${new Date().toISOString().split('T')[0]}.csv`;a.click();}
 
-// ── FIXED importCSV ──
 function importCSV(event){
   const file=event.target.files[0];if(!file)return;
   const reader=new FileReader();
@@ -377,13 +375,15 @@ function importCSV(event){
       name:['name','full name','contact name'],
       company:['company','business','company name'],
       email:['email','email address'],
-      phone:['phone','mobile','contact number'],
+      phone:['phone','mobile','contact number','phone number'],
       stage:['stage'],
       type:['type'],
       service:['service','service interest'],
       source:['source','lead source'],
       value:['value','deal value','amount'],
-      city:['city','location']
+      city:['city','location'],
+      followup_date:['follow-up date','follow up date','followup date','follow-up','followup'],
+      notes:['notes','note'],
     };
     const colIndex={};
     Object.entries(fieldMap).forEach(([key,aliases])=>{
@@ -402,35 +402,28 @@ function importCSV(event){
         company:(r[colIndex.company]!=null?r[colIndex.company]:'').trim(),
         email:(r[colIndex.email]!=null?r[colIndex.email]:'').trim(),
         phone:(r[colIndex.phone]!=null?r[colIndex.phone]:'').trim(),
-        stage:STAGES.includes((r[colIndex.stage]||'').trim())?(r[colIndex.stage]||'').trim():'Fresh Lead',
+        stage:STAGES.includes((r[colIndex.stage]||'').trim())?(r[colIndex.stage]||'').trim():(r[colIndex.stage]||'').trim()==='Fresh'?'Fresh Lead':'Fresh Lead',
         type:(r[colIndex.type]||'').trim()==='Client'?'Client':'Prospect',
         service:(r[colIndex.service]!=null?r[colIndex.service]:'').trim(),
         source:(r[colIndex.source]!=null?r[colIndex.source]:'').trim(),
         value:+(r[colIndex.value]||0)||0,
         city:(r[colIndex.city]!=null?r[colIndex.city]:'').trim(),
+        followup_date:(r[colIndex.followup_date]||'').trim()||null,
+        notes:(r[colIndex.notes]!=null?r[colIndex.notes]:'').trim(),
         created_by:state.user.id,
         updated_at:now,
       }));
     if(!toInsert.length){alert('No valid rows found in CSV.');return;}
     if(!confirm(`Import ${toInsert.length} leads?`))return;
-    let imported=0;
-    let errors=0;
+    let imported=0,errors=0;
     for(let i=0;i<toInsert.length;i+=100){
       const batch=toInsert.slice(i,i+100);
       const{error}=await db.from('leads').insert(batch);
-      if(error){
-        console.error(`Batch ${Math.floor(i/100)+1} error:`,error);
-        errors+=batch.length;
-      }else{
-        imported+=batch.length;
-      }
+      if(error){console.error(`Batch error:`,error);errors+=batch.length;}
+      else{imported+=batch.length;}
     }
     await loadLeads();renderLeads();renderDashboard();
-    if(errors>0){
-      alert(`Imported ${imported} leads successfully.\n${errors} rows failed — open Console for details.`);
-    }else{
-      alert(`✓ Imported ${imported} leads successfully!`);
-    }
+    alert(errors>0?`Imported ${imported} leads.\n${errors} rows failed.`:`✓ Imported ${imported} leads successfully!`);
   };
   reader.readAsText(file);
   event.target.value='';
