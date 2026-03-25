@@ -411,7 +411,6 @@ function importCSV(event){
         followup_date:(r[colIndex.followup_date]||'').trim()||null,
         notes:(r[colIndex.notes]!=null?r[colIndex.notes]:'').trim(),
         created_by:state.user.id,
-        updated_at:now,
       }));
     if(!toInsert.length){alert('No valid rows found in CSV.');return;}
     if(!confirm(`Import ${toInsert.length} leads?`))return;
