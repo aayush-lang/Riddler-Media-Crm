@@ -285,3 +285,9 @@ body { font-family: 'DM Sans', system-ui, sans-serif; font-size: 14px; color: va
 .brief-view-label { color: var(--text-2); flex-shrink: 0; width: 160px; }
 .brief-view-value { color: var(--text-1); text-align: right; }
 .brief-tags-display { display: flex; flex-wrap: wrap; gap: 5px; justify-content: flex-end; }
+/* ── DASHBOARD PERIOD FILTER ── */
+.dash-period-tabs { display:flex; gap:4px; }
+.dash-period-btn { padding:6px 14px; border:1px solid var(--border-strong); border-radius:20px; background:var(--surface); color:var(--text-2); font-size:12px; font-family:inherit; cursor:pointer; transition:all 0.15s; }
+.dash-period-btn:hover { border-color:var(--purple); color:var(--purple); }
+.dash-period-btn.active { background:var(--purple); color:white; border-color:var(--purple); font-weight:500; }
+.metric-value.blue { color: var(--blue); }
