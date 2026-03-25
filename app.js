@@ -16,10 +16,12 @@ const STAGE_COLORS = {
 
 let state = {
   user:null,profile:null,profiles:[],leads:[],filteredLeads:[],reminders:[],briefs:[],
+  activities:[],
   config:{services:[],sources:SOURCES,stages:STAGES},
   page:1,pageSize:20,sortCol:'created_at',sortDir:'desc',
   selectedLeads:new Set(),currentReminderFilter:'pending',
   editLeadId:null,editReminderId:null,activeView:'dashboard',filterDebounce:null,
+  dashPeriod:'all',
 };
 
 let briefsModule = null;
@@ -51,7 +53,7 @@ async function initApp(user) {
   document.getElementById('user-avatar').textContent=prof?.avatar_initials||'?';
   document.getElementById('auth-screen').style.display='none';
   document.getElementById('app').style.display='flex';
-  await Promise.all([loadConfig(),loadProfiles(),loadLeads(),loadReminders()]);
+  await Promise.all([loadConfig(),loadProfiles(),loadLeads(),loadReminders(),loadActivities()]);
   renderDashboard();renderLeads();renderReminders();
 
   briefsModule = initBriefs(db, state, esc, formatDate);
@@ -66,8 +68,9 @@ async function initApp(user) {
   checkReminderPopups();
   setInterval(checkReminderPopups,60000);
   db.channel('leads-changes')
-    .on('postgres_changes',{event:'*',schema:'public',table:'leads'},()=>loadLeads().then(renderLeads))
+    .on('postgres_changes',{event:'*',schema:'public',table:'leads'},()=>loadLeads().then(()=>{renderLeads();renderDashboard();}))
     .on('postgres_changes',{event:'*',schema:'public',table:'reminders'},()=>loadReminders().then(renderReminders))
+    .on('postgres_changes',{event:'*',schema:'public',table:'activities'},()=>loadActivities().then(()=>renderDashboard()))
     .subscribe();
 }
 
@@ -75,6 +78,161 @@ async function loadConfig(){const{data}=await db.from('config').select('*');if(d
 async function loadProfiles(){const{data}=await db.from('profiles').select('*').order('name');if(data)state.profiles=data;populateAssignedSelects();}
 async function loadLeads(){const{data,error}=await db.from('leads').select('*, assigned_profile:profiles!leads_assigned_to_fkey(name,avatar_initials)').order(state.sortCol,{ascending:state.sortDir==='asc'});if(!error&&data){state.leads=data;applyFilters();}}
 async function loadReminders(){const{data}=await db.from('reminders').select('*, lead:leads(name,company), assignee:profiles!reminders_assigned_to_fkey(name)').order('due_date',{ascending:true}).order('due_time',{ascending:true});if(data){state.reminders=data;updateReminderBadge();}}
+async function loadActivities(){const{data}=await db.from('activities').select('*').order('created_at',{ascending:true});if(data)state.activities=data;}
+
+// ── DASHBOARD DATE FILTER HELPERS ──
+function getDashRange(period) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  let start = null;
+  if(period==='today'){start=today;}
+  else if(period==='week'){const d=new Date(today);d.setDate(d.getDate()-d.getDay());start=d;}
+  else if(period==='month'){start=new Date(now.getFullYear(),now.getMonth(),1);}
+  else if(period==='quarter'){const q=Math.floor(now.getMonth()/3);start=new Date(now.getFullYear(),q*3,1);}
+  return start ? start.toISOString() : null;
+}
+
+function filterByPeriod(items, dateField, period) {
+  const start = getDashRange(period);
+  if(!start) return items;
+  return items.filter(i => i[dateField] && i[dateField] >= start);
+}
+
+function getChartBuckets(period) {
+  const now = new Date();
+  const buckets = [];
+  if(period==='today') {
+    for(let h=0;h<24;h++) buckets.push({label:`${h}:00`,key:String(h).padStart(2,'0')});
+  } else if(period==='week') {
+    const days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const start=new Date();start.setDate(start.getDate()-start.getDay());
+    for(let i=0;i<7;i++){const d=new Date(start);d.setDate(d.getDate()+i);buckets.push({label:days[d.getDay()],key:d.toISOString().split('T')[0]});}
+  } else if(period==='month') {
+    const daysInMonth=new Date(now.getFullYear(),now.getMonth()+1,0).getDate();
+    for(let d=1;d<=daysInMonth;d++) buckets.push({label:String(d),key:`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`});
+  } else if(period==='quarter') {
+    const q=Math.floor(now.getMonth()/3);
+    for(let m=q*3;m<q*3+3;m++){const mn=new Date(now.getFullYear(),m,1).toLocaleDateString('en-IN',{month:'short'});buckets.push({label:mn,key:`${now.getFullYear()}-${String(m+1).padStart(2,'0')}`});}
+  } else {
+    // All time — group by month, last 12 months
+    for(let i=11;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);buckets.push({label:d.toLocaleDateString('en-IN',{month:'short',year:'2-digit'}),key:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`});}
+  }
+  return buckets;
+}
+
+function getItemKey(isoStr, period) {
+  if(!isoStr) return '';
+  if(period==='today') return isoStr.substring(11,13);
+  if(period==='week'||period==='month') return isoStr.substring(0,10);
+  return isoStr.substring(0,7);
+}
+
+function renderBarChart(containerId, buckets, counts, color='#6366F1') {
+  const max = Math.max(...Object.values(counts), 1);
+  const container = document.getElementById(containerId);
+  if(!container) return;
+  const showEvery = buckets.length > 15 ? Math.ceil(buckets.length/10) : 1;
+  container.innerHTML = `
+    <div style="display:flex;align-items:flex-end;gap:3px;height:100px;padding-bottom:20px;position:relative">
+      ${buckets.map((b,i)=>{
+        const val = counts[b.key]||0;
+        const h = max>0?Math.round((val/max)*80):0;
+        const showLabel = i%showEvery===0;
+        return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;position:relative">
+          <div title="${b.label}: ${val}" style="width:100%;background:${color};border-radius:3px 3px 0 0;height:${h}px;min-height:${val>0?2:0}px;transition:height 0.3s;cursor:default"></div>
+          <span style="font-size:9px;color:var(--text-3);position:absolute;bottom:-18px;white-space:nowrap;${showLabel?'':'visibility:hidden'}">${b.label}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+function renderDashboard() {
+  const period = state.dashPeriod;
+  const allLeads = state.leads;
+  const filteredLeads = filterByPeriod(allLeads, 'created_at', period);
+  const filteredActivities = filterByPeriod(state.activities||[], 'created_at', period);
+
+  // Leads with activity in period (unique lead IDs)
+  const followedUpLeadIds = new Set(filteredActivities.map(a=>a.lead_id).filter(Boolean));
+  const followedUpCount = followedUpLeadIds.size;
+
+  const won = filteredLeads.filter(l=>l.stage==='Closed');
+  const totalVal = filteredLeads.reduce((s,l)=>s+(+l.value||0),0);
+  const wonVal = won.reduce((s,l)=>s+(+l.value||0),0);
+  const conv = filteredLeads.length?Math.round(won.length/filteredLeads.length*100):0;
+  const today = new Date().toISOString().split('T')[0];
+
+  // Period label
+  const periodLabels = {today:'Today',week:'This week',month:'This month',quarter:'This quarter',all:'All time'};
+
+  // ── METRICS ──
+  document.getElementById('metrics-row').innerHTML=`
+    <div class="metric-card"><div class="metric-label">Total leads</div><div class="metric-value purple">${filteredLeads.length.toLocaleString('en-IN')}</div><div class="metric-sub">${periodLabels[period]}</div></div>
+    <div class="metric-card"><div class="metric-label">Followed up</div><div class="metric-value blue">${followedUpCount.toLocaleString('en-IN')}</div><div class="metric-sub">Leads with activity</div></div>
+    <div class="metric-card"><div class="metric-label">Conversion rate</div><div class="metric-value green">${conv}%</div><div class="metric-sub">${won.length} closed</div></div>
+    <div class="metric-card"><div class="metric-label">Pipeline value</div><div class="metric-value amber">₹${formatINR(totalVal)}</div><div class="metric-sub">Estimated retainers</div></div>`;
+
+  // ── DATE FILTER TABS ──
+  const filterHtml = `<div class="dash-period-tabs">
+    ${['today','week','month','quarter','all'].map(p=>`<button class="dash-period-btn ${period===p?'active':''}" onclick="setDashPeriod('${p}')">${periodLabels[p]}</button>`).join('')}
+  </div>`;
+  const filterEl = document.getElementById('dash-period-filter');
+  if(filterEl) filterEl.innerHTML = filterHtml;
+
+  // ── STAGE BARS ──
+  const max=Math.max(...STAGES.map(s=>filteredLeads.filter(l=>l.stage===s).length),1);
+  document.getElementById('stage-bars').innerHTML=STAGES.map(s=>{const c=filteredLeads.filter(l=>l.stage===s).length;return`<div class="stage-bar-row"><span class="stage-bar-label" style="width:110px">${s}</span><div class="stage-bar-track"><div class="stage-bar-fill" style="width:${Math.round(c/max*100)}%;background:${STAGE_COLORS[s]}"></div></div><span class="stage-bar-count">${c}</span></div>`;}).join('');
+
+  // ── SOURCE CHART ──
+  const srcMap={};filteredLeads.forEach(l=>{if(l.source){const src=l.source.trim();srcMap[src]=(srcMap[src]||0)+1;}});
+  document.getElementById('source-chart').innerHTML=Object.entries(srcMap).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([s,c])=>`<div class="source-row"><span>${s}</span><span class="source-pill">${c}</span></div>`).join('')||'<div class="empty-state">No source data yet</div>';
+
+  // ── LEADS CREATED CHART ──
+  const buckets = getChartBuckets(period);
+  const createdCounts = {};
+  buckets.forEach(b=>createdCounts[b.key]=0);
+  filteredLeads.forEach(l=>{
+    const key = getItemKey(l.created_at, period);
+    if(key in createdCounts) createdCounts[key]++;
+  });
+  const createdEl = document.getElementById('leads-created-chart');
+  if(createdEl){
+    createdEl.innerHTML='';
+    renderBarChart('leads-created-chart-inner', buckets, createdCounts, '#6366F1');
+  }
+
+  // ── LEADS FOLLOWED UP CHART ──
+  const followupCounts = {};
+  buckets.forEach(b=>followupCounts[b.key]=0);
+  // Count unique leads followed up per bucket
+  const bucketLeadSets = {};
+  buckets.forEach(b=>bucketLeadSets[b.key]=new Set());
+  filteredActivities.forEach(a=>{
+    if(!a.lead_id) return;
+    const key = getItemKey(a.created_at, period);
+    if(key in bucketLeadSets) bucketLeadSets[key].add(a.lead_id);
+  });
+  buckets.forEach(b=>followupCounts[b.key]=bucketLeadSets[b.key].size);
+  const followupEl = document.getElementById('leads-followup-chart');
+  if(followupEl){
+    followupEl.innerHTML='';
+    renderBarChart('leads-followup-chart-inner', buckets, followupCounts, '#10B981');
+  }
+
+  // ── FOLLOW-UPS TODAY ──
+  const due=allLeads.filter(l=>l.followup_date===today);
+  document.getElementById('followups-today').innerHTML=due.length?due.slice(0,5).map(l=>`<div class="followup-row"><div><div class="followup-name">${l.name}</div><div class="followup-company">${l.company||''}</div></div><button class="btn-sm" onclick="openLeadDetail('${l.id}')">View</button></div>`).join(''):'<div class="empty-state"><div class="empty-state-icon">✓</div>No follow-ups today</div>';
+
+  // ── TEAM PERFORMANCE ──
+  const perfMap={};filteredLeads.forEach(l=>{if(!l.assigned_to)return;const prof=state.profiles.find(p=>p.id===l.assigned_to);const name=prof?.name||'Unknown';if(!perfMap[name])perfMap[name]={total:0,won:0};perfMap[name].total++;if(l.stage==='Closed')perfMap[name].won++;});
+  document.getElementById('team-perf').innerHTML=Object.entries(perfMap).sort((a,b)=>b[1].total-a[1].total).map(([name,p])=>`<div class="team-row"><span style="font-weight:500">${name}</span><div class="team-stats"><div class="team-stat"><div class="team-stat-num">${p.total}</div><div class="team-stat-lbl">Leads</div></div><div class="team-stat"><div class="team-stat-num">${p.won}</div><div class="team-stat-lbl">Closed</div></div><div class="team-stat"><div class="team-stat-num">${p.total?Math.round(p.won/p.total*100):0}%</div><div class="team-stat-lbl">Conv.</div></div></div></div>`).join('')||'<div class="empty-state">Assign leads to see stats</div>';
+}
+
+function setDashPeriod(period) {
+  state.dashPeriod = period;
+  renderDashboard();
+}
+window.setDashPeriod = setDashPeriod;
 
 function populateSelects(){
   const svcs=state.config.services||[];
@@ -107,27 +265,6 @@ function switchView(viewName,btn){
   if(viewName==='pipeline')renderKanban();
   if(viewName==='briefs'){briefsModule?.renderBriefs();}
   if(viewName==='settings'){loadProfiles().then(()=>populateAssignedSelects());}
-}
-
-function renderDashboard(){
-  const leads=state.leads;const won=leads.filter(l=>l.stage==='Closed');
-  const totalVal=leads.reduce((s,l)=>s+(+l.value||0),0);
-  const wonVal=won.reduce((s,l)=>s+(+l.value||0),0);
-  const conv=leads.length?Math.round(won.length/leads.length*100):0;
-  const today=new Date().toISOString().split('T')[0];
-  document.getElementById('metrics-row').innerHTML=`
-    <div class="metric-card"><div class="metric-label">Total leads</div><div class="metric-value purple">${leads.length.toLocaleString('en-IN')}</div><div class="metric-sub">All time</div></div>
-    <div class="metric-card"><div class="metric-label">Pipeline value</div><div class="metric-value amber">₹${formatINR(totalVal)}</div><div class="metric-sub">Estimated retainers</div></div>
-    <div class="metric-card"><div class="metric-label">Conversion rate</div><div class="metric-value green">${conv}%</div><div class="metric-sub">${won.length} closed</div></div>
-    <div class="metric-card"><div class="metric-label">Won revenue</div><div class="metric-value green">₹${formatINR(wonVal)}</div><div class="metric-sub">Closed deals</div></div>`;
-  const max=Math.max(...STAGES.map(s=>leads.filter(l=>l.stage===s).length),1);
-  document.getElementById('stage-bars').innerHTML=STAGES.map(s=>{const c=leads.filter(l=>l.stage===s).length;return`<div class="stage-bar-row"><span class="stage-bar-label" style="width:110px">${s}</span><div class="stage-bar-track"><div class="stage-bar-fill" style="width:${Math.round(c/max*100)}%;background:${STAGE_COLORS[s]}"></div></div><span class="stage-bar-count">${c}</span></div>`;}).join('');
-  const srcMap={};leads.forEach(l=>{if(l.source)srcMap[l.source]=(srcMap[l.source]||0)+1;});
-  document.getElementById('source-chart').innerHTML=Object.entries(srcMap).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([s,c])=>`<div class="source-row"><span>${s}</span><span class="source-pill">${c}</span></div>`).join('')||'<div class="empty-state">No source data yet</div>';
-  const due=leads.filter(l=>l.followup_date===today);
-  document.getElementById('followups-today').innerHTML=due.length?due.slice(0,5).map(l=>`<div class="followup-row"><div><div class="followup-name">${l.name}</div><div class="followup-company">${l.company||''}</div></div><button class="btn-sm" onclick="openLeadDetail('${l.id}')">View</button></div>`).join(''):'<div class="empty-state"><div class="empty-state-icon">✓</div>No follow-ups today</div>';
-  const perfMap={};leads.forEach(l=>{if(!l.assigned_to)return;const prof=state.profiles.find(p=>p.id===l.assigned_to);const name=prof?.name||'Unknown';if(!perfMap[name])perfMap[name]={total:0,won:0};perfMap[name].total++;if(l.stage==='Closed')perfMap[name].won++;});
-  document.getElementById('team-perf').innerHTML=Object.entries(perfMap).sort((a,b)=>b[1].total-a[1].total).map(([name,p])=>`<div class="team-row"><span style="font-weight:500">${name}</span><div class="team-stats"><div class="team-stat"><div class="team-stat-num">${p.total}</div><div class="team-stat-lbl">Leads</div></div><div class="team-stat"><div class="team-stat-num">${p.won}</div><div class="team-stat-lbl">Closed</div></div><div class="team-stat"><div class="team-stat-num">${p.total?Math.round(p.won/p.total*100):0}%</div><div class="team-stat-lbl">Conv.</div></div></div></div>`).join('')||'<div class="empty-state">Assign leads to see stats</div>';
 }
 
 function applyFilters(){
@@ -250,7 +387,7 @@ async function saveLead(){
     payload.created_by=state.user.id;const{data}=await db.from('leads').insert(payload).select().single();
     if(data){await db.from('activities').insert({lead_id:data.id,user_id:state.user.id,type:'created',text:'Lead created'});}
   }
-  closeModal('add-lead-modal');await loadLeads();renderLeads();renderDashboard();if(state.activeView==='pipeline')renderKanban();
+  closeModal('add-lead-modal');await loadLeads();await loadActivities();renderLeads();renderDashboard();if(state.activeView==='pipeline')renderKanban();
 }
 
 async function deleteLead(id){if(!confirm('Delete this lead?'))return;await db.from('leads').delete().eq('id',id);document.getElementById('lead-detail-overlay').style.display='none';await loadLeads();renderLeads();renderDashboard();if(state.activeView==='pipeline')renderKanban();}
@@ -319,8 +456,8 @@ async function openLeadDetail(id){
 }
 
 async function assignLead(leadId){const newOwner=document.getElementById('assign-select').value;const ownerName=state.profiles.find(p=>p.id===newOwner)?.name||'Unassigned';await db.from('leads').update({assigned_to:newOwner||null,updated_at:new Date().toISOString()}).eq('id',leadId);await db.from('activities').insert({lead_id:leadId,user_id:state.user.id,type:'edit',text:`Lead assigned to ${ownerName}`});await loadLeads();renderLeads();openLeadDetail(leadId);}
-async function changeStageFromPanel(leadId,stage){const old=state.leads.find(l=>l.id===leadId);await db.from('leads').update({stage,updated_at:new Date().toISOString()}).eq('id',leadId);await db.from('activities').insert({lead_id:leadId,user_id:state.user.id,type:'stage_change',text:`Stage changed from ${old?.stage||'?'} to ${stage}`});await loadLeads();renderLeads();renderDashboard();if(state.activeView==='pipeline')renderKanban();openLeadDetail(leadId);}
-async function postComment(leadId){const inp=document.getElementById(`comment-input-${leadId}`);const text=inp?.value.trim();if(!text)return;await db.from('activities').insert({lead_id:leadId,user_id:state.user.id,type:'comment',text});inp.value='';openLeadDetail(leadId);}
+async function changeStageFromPanel(leadId,stage){const old=state.leads.find(l=>l.id===leadId);await db.from('leads').update({stage,updated_at:new Date().toISOString()}).eq('id',leadId);await db.from('activities').insert({lead_id:leadId,user_id:state.user.id,type:'stage_change',text:`Stage changed from ${old?.stage||'?'} to ${stage}`});await loadLeads();await loadActivities();renderLeads();renderDashboard();if(state.activeView==='pipeline')renderKanban();openLeadDetail(leadId);}
+async function postComment(leadId){const inp=document.getElementById(`comment-input-${leadId}`);const text=inp?.value.trim();if(!text)return;await db.from('activities').insert({lead_id:leadId,user_id:state.user.id,type:'comment',text});inp.value='';await loadActivities();renderDashboard();openLeadDetail(leadId);}
 
 function renderKanban(){
   document.getElementById('kanban-board').innerHTML=STAGES.map(stage=>{
@@ -430,7 +567,7 @@ function formatINR(n){if(n>=100000)return(n/100000).toFixed(1)+'L';if(n>=1000)re
 function formatDate(dateStr){if(!dateStr)return'';const d=new Date(dateStr+'T00:00:00');return d.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});}
 function formatDateTime(isoStr){if(!isoStr)return'';return new Date(isoStr).toLocaleString('en-IN',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});}
 
-window.handleLogin=handleLogin;window.handleLogout=handleLogout;window.showForgot=showForgot;window.openModal=openModal;window.closeModal=closeModal;window.overlayClose=overlayClose;window.openAddLead=openAddLead;window.openEditLead=openEditLead;window.saveLead=saveLead;window.deleteLead=deleteLead;window.openLeadDetail=openLeadDetail;window.changeStageFromPanel=changeStageFromPanel;window.assignLead=assignLead;window.postComment=postComment;window.openAddReminder=openAddReminder;window.openReminderForLead=openReminderForLead;window.openEditReminder=openEditReminder;window.saveReminder=saveReminder;window.markReminderDone=markReminderDone;window.deleteReminder=deleteReminder;window.doneReminderToast=doneReminderToast;window.snoozeReminder=snoozeReminder;window.closeToast=closeToast;window.exportCSV=exportCSV;window.importCSV=importCSV;window.inviteTeamMember=inviteTeamMember;window.applyFilters=applyFilters;window.debounceFilter=debounceFilter;window.clearFilters=clearFilters;window.goPage=goPage;window.toggleSelect=toggleSelect;window.toggleSelectAll=toggleSelectAll;window.bulkMoveStage=bulkMoveStage;window.bulkDelete=bulkDelete;window.kanbanDragStart=kanbanDragStart;window.kanbanDragEnd=kanbanDragEnd;window.kanbanDragOver=kanbanDragOver;window.kanbanDragLeave=kanbanDragLeave;window.kanbanDrop=kanbanDrop;
+window.handleLogin=handleLogin;window.handleLogout=handleLogout;window.showForgot=showForgot;window.openModal=openModal;window.closeModal=closeModal;window.overlayClose=overlayClose;window.openAddLead=openAddLead;window.openEditLead=openEditLead;window.saveLead=saveLead;window.deleteLead=deleteLead;window.openLeadDetail=openLeadDetail;window.changeStageFromPanel=changeStageFromPanel;window.assignLead=assignLead;window.postComment=postComment;window.openAddReminder=openAddReminder;window.openReminderForLead=openReminderForLead;window.openEditReminder=openEditReminder;window.saveReminder=saveReminder;window.markReminderDone=markReminderDone;window.deleteReminder=deleteReminder;window.doneReminderToast=doneReminderToast;window.snoozeReminder=snoozeReminder;window.closeToast=closeToast;window.exportCSV=exportCSV;window.importCSV=importCSV;window.inviteTeamMember=inviteTeamMember;window.applyFilters=applyFilters;window.debounceFilter=debounceFilter;window.clearFilters=clearFilters;window.goPage=goPage;window.toggleSelect=toggleSelect;window.toggleSelectAll=toggleSelectAll;window.bulkMoveStage=bulkMoveStage;window.bulkDelete=bulkDelete;window.kanbanDragStart=kanbanDragStart;window.kanbanDragEnd=kanbanDragEnd;window.kanbanDragOver=kanbanDragOver;window.kanbanDragLeave=kanbanDragLeave;window.kanbanDrop=kanbanDrop;window.setDashPeriod=setDashPeriod;
 
 (async()=>{
   const{data:{session}}=await db.auth.getSession();
