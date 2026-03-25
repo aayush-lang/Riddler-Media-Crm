@@ -195,10 +195,7 @@ function renderDashboard() {
     const key = getItemKey(l.created_at, period);
     if(key in createdCounts) createdCounts[key]++;
   });
-  const createdEl = document.getElementById('leads-created-chart');
-  if(createdEl){
-    createdEl.innerHTML='';
-    renderBarChart('leads-created-chart-inner', buckets, createdCounts, '#6366F1');
+ renderBarChart('leads-created-chart-inner', buckets, createdCounts, '#6366F1');
   }
 
   // ── LEADS FOLLOWED UP CHART ──
@@ -213,10 +210,7 @@ function renderDashboard() {
     if(key in bucketLeadSets) bucketLeadSets[key].add(a.lead_id);
   });
   buckets.forEach(b=>followupCounts[b.key]=bucketLeadSets[b.key].size);
-  const followupEl = document.getElementById('leads-followup-chart');
-  if(followupEl){
-    followupEl.innerHTML='';
-    renderBarChart('leads-followup-chart-inner', buckets, followupCounts, '#10B981');
+ renderBarChart('leads-followup-chart-inner', buckets, followupCounts, '#10B981');
   }
 
   // ── FOLLOW-UPS TODAY ──
