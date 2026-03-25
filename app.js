@@ -370,7 +370,7 @@ function importCSV(event){
   const reader=new FileReader();
   reader.onload=async e=>{
     const lines=e.target.result.split('\n').filter(l=>l.trim());
-    const headers=lines[0].split(',').map(h=>h.replace(/"/g,'').toLowerCase().trim());
+    const headers=lines[0].match(/("([^"]|"")*"|[^,]*)/g)?.map(h=>h.replace(/^"|"$/g,'').toLowerCase().trim())||[];
     const fieldMap={
       name:['name','full name','contact name'],
       company:['company','business','company name'],
