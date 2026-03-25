@@ -382,8 +382,6 @@ function importCSV(event){
       source:['source','lead source'],
       value:['value','deal value','amount'],
       city:['city','location'],
-      followup_date:['follow-up date','follow up date','followup date','follow-up','followup'],
-      notes:['notes','note'],
     };
     const colIndex={};
     Object.entries(fieldMap).forEach(([key,aliases])=>{
@@ -394,7 +392,6 @@ function importCSV(event){
       const cells=line.match(/("([^"]|"")*"|[^,]*)/g)?.map(c=>c.replace(/^"|"$/g,'').replace(/""/g,'"').trim())||[];
       return cells;
     });
-    const now=new Date().toISOString();
     const toInsert=rows
       .filter(r=>r.length>=1&&r[colIndex.name??0]?.trim())
       .map(r=>({
@@ -408,8 +405,6 @@ function importCSV(event){
         source:(r[colIndex.source]!=null?r[colIndex.source]:'').trim(),
         value:+(r[colIndex.value]||0)||0,
         city:(r[colIndex.city]!=null?r[colIndex.city]:'').trim(),
-        followup_date:(r[colIndex.followup_date]||'').trim()||null,
-        notes:(r[colIndex.notes]!=null?r[colIndex.notes]:'').trim(),
         created_by:state.user.id,
       }));
     if(!toInsert.length){alert('No valid rows found in CSV.');return;}
@@ -418,7 +413,7 @@ function importCSV(event){
     for(let i=0;i<toInsert.length;i+=100){
       const batch=toInsert.slice(i,i+100);
       const{error}=await db.from('leads').insert(batch);
-      if(error){console.error(`Batch error:`,error);errors+=batch.length;}
+      if(error){console.error('Batch error:',error);errors+=batch.length;}
       else{imported+=batch.length;}
     }
     await loadLeads();renderLeads();renderDashboard();
