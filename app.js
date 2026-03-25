@@ -80,153 +80,127 @@ async function loadLeads(){const{data,error}=await db.from('leads').select('*, a
 async function loadReminders(){const{data}=await db.from('reminders').select('*, lead:leads(name,company), assignee:profiles!reminders_assigned_to_fkey(name)').order('due_date',{ascending:true}).order('due_time',{ascending:true});if(data){state.reminders=data;updateReminderBadge();}}
 async function loadActivities(){const{data}=await db.from('activities').select('*').order('created_at',{ascending:true});if(data)state.activities=data;}
 
-// ── DASHBOARD DATE FILTER HELPERS ──
 function getDashRange(period) {
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  let start = null;
+  const now=new Date();
+  const today=new Date(now.getFullYear(),now.getMonth(),now.getDate());
+  let start=null;
   if(period==='today'){start=today;}
   else if(period==='week'){const d=new Date(today);d.setDate(d.getDate()-d.getDay());start=d;}
   else if(period==='month'){start=new Date(now.getFullYear(),now.getMonth(),1);}
   else if(period==='quarter'){const q=Math.floor(now.getMonth()/3);start=new Date(now.getFullYear(),q*3,1);}
-  return start ? start.toISOString() : null;
+  return start?start.toISOString():null;
 }
 
-function filterByPeriod(items, dateField, period) {
-  const start = getDashRange(period);
-  if(!start) return items;
-  return items.filter(i => i[dateField] && i[dateField] >= start);
+function filterByPeriod(items,dateField,period){
+  const start=getDashRange(period);
+  if(!start)return items;
+  return items.filter(i=>i[dateField]&&i[dateField]>=start);
 }
 
-function getChartBuckets(period) {
-  const now = new Date();
-  const buckets = [];
-  if(period==='today') {
-    for(let h=0;h<24;h++) buckets.push({label:`${h}:00`,key:String(h).padStart(2,'0')});
-  } else if(period==='week') {
+function getChartBuckets(period){
+  const now=new Date();
+  const buckets=[];
+  if(period==='today'){
+    for(let h=0;h<24;h++)buckets.push({label:`${h}:00`,key:String(h).padStart(2,'0')});
+  }else if(period==='week'){
     const days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     const start=new Date();start.setDate(start.getDate()-start.getDay());
     for(let i=0;i<7;i++){const d=new Date(start);d.setDate(d.getDate()+i);buckets.push({label:days[d.getDay()],key:d.toISOString().split('T')[0]});}
-  } else if(period==='month') {
-    const daysInMonth=new Date(now.getFullYear(),now.getMonth()+1,0).getDate();
-    for(let d=1;d<=daysInMonth;d++) buckets.push({label:String(d),key:`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`});
-  } else if(period==='quarter') {
+  }else if(period==='month'){
+    const dim=new Date(now.getFullYear(),now.getMonth()+1,0).getDate();
+    for(let d=1;d<=dim;d++)buckets.push({label:String(d),key:`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`});
+  }else if(period==='quarter'){
     const q=Math.floor(now.getMonth()/3);
     for(let m=q*3;m<q*3+3;m++){const mn=new Date(now.getFullYear(),m,1).toLocaleDateString('en-IN',{month:'short'});buckets.push({label:mn,key:`${now.getFullYear()}-${String(m+1).padStart(2,'0')}`});}
-  } else {
-    // All time — group by month, last 12 months
+  }else{
     for(let i=11;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);buckets.push({label:d.toLocaleDateString('en-IN',{month:'short',year:'2-digit'}),key:`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`});}
   }
   return buckets;
 }
 
-function getItemKey(isoStr, period) {
-  if(!isoStr) return '';
-  if(period==='today') return isoStr.substring(11,13);
-  if(period==='week'||period==='month') return isoStr.substring(0,10);
+function getItemKey(isoStr,period){
+  if(!isoStr)return'';
+  if(period==='today')return isoStr.substring(11,13);
+  if(period==='week'||period==='month')return isoStr.substring(0,10);
   return isoStr.substring(0,7);
 }
 
-function renderBarChart(containerId, buckets, counts, color='#6366F1') {
-  const max = Math.max(...Object.values(counts), 1);
-  const container = document.getElementById(containerId);
-  if(!container) return;
-  const showEvery = buckets.length > 15 ? Math.ceil(buckets.length/10) : 1;
-  container.innerHTML = `
-    <div style="display:flex;align-items:flex-end;gap:3px;height:100px;padding-bottom:20px;position:relative">
-      ${buckets.map((b,i)=>{
-        const val = counts[b.key]||0;
-        const h = max>0?Math.round((val/max)*80):0;
-        const showLabel = i%showEvery===0;
-        return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;position:relative">
-          <div title="${b.label}: ${val}" style="width:100%;background:${color};border-radius:3px 3px 0 0;height:${h}px;min-height:${val>0?2:0}px;transition:height 0.3s;cursor:default"></div>
-          <span style="font-size:9px;color:var(--text-3);position:absolute;bottom:-18px;white-space:nowrap;${showLabel?'':'visibility:hidden'}">${b.label}</span>
-        </div>`;
-      }).join('')}
-    </div>`;
+function renderBarChart(containerId,buckets,counts,color){
+  const max=Math.max(...Object.values(counts),1);
+  const container=document.getElementById(containerId);
+  if(!container)return;
+  const showEvery=buckets.length>15?Math.ceil(buckets.length/10):1;
+  container.innerHTML=`<div style="display:flex;align-items:flex-end;gap:3px;height:100px;padding-bottom:20px;position:relative">
+    ${buckets.map((b,i)=>{
+      const val=counts[b.key]||0;
+      const h=max>0?Math.round((val/max)*80):0;
+      const showLabel=i%showEvery===0;
+      return`<div style="flex:1;display:flex;flex-direction:column;align-items:center;position:relative">
+        <div title="${b.label}: ${val}" style="width:100%;background:${color};border-radius:3px 3px 0 0;height:${h}px;min-height:${val>0?2:0}px;transition:height 0.3s"></div>
+        <span style="font-size:9px;color:var(--text-3);position:absolute;bottom:-18px;white-space:nowrap;${showLabel?'':'visibility:hidden'}">${b.label}</span>
+      </div>`;
+    }).join('')}
+  </div>`;
 }
 
-function renderDashboard() {
-  const period = state.dashPeriod;
-  const allLeads = state.leads;
-  const filteredLeads = filterByPeriod(allLeads, 'created_at', period);
-  const filteredActivities = filterByPeriod(state.activities||[], 'created_at', period);
+function renderDashboard(){
+  const period=state.dashPeriod;
+  const allLeads=state.leads;
+  const filteredLeads=filterByPeriod(allLeads,'created_at',period);
+  const filteredActivities=filterByPeriod(state.activities||[],'created_at',period);
+  const followedUpLeadIds=new Set(filteredActivities.map(a=>a.lead_id).filter(Boolean));
+  const followedUpCount=followedUpLeadIds.size;
+  const won=filteredLeads.filter(l=>l.stage==='Closed');
+  const totalVal=filteredLeads.reduce((s,l)=>s+(+l.value||0),0);
+  const conv=filteredLeads.length?Math.round(won.length/filteredLeads.length*100):0;
+  const today=new Date().toISOString().split('T')[0];
+  const periodLabels={today:'Today',week:'This week',month:'This month',quarter:'This quarter',all:'All time'};
 
-  // Leads with activity in period (unique lead IDs)
-  const followedUpLeadIds = new Set(filteredActivities.map(a=>a.lead_id).filter(Boolean));
-  const followedUpCount = followedUpLeadIds.size;
-
-  const won = filteredLeads.filter(l=>l.stage==='Closed');
-  const totalVal = filteredLeads.reduce((s,l)=>s+(+l.value||0),0);
-  const wonVal = won.reduce((s,l)=>s+(+l.value||0),0);
-  const conv = filteredLeads.length?Math.round(won.length/filteredLeads.length*100):0;
-  const today = new Date().toISOString().split('T')[0];
-
-  // Period label
-  const periodLabels = {today:'Today',week:'This week',month:'This month',quarter:'This quarter',all:'All time'};
-
-  // ── METRICS ──
+  // Metrics
   document.getElementById('metrics-row').innerHTML=`
     <div class="metric-card"><div class="metric-label">Total leads</div><div class="metric-value purple">${filteredLeads.length.toLocaleString('en-IN')}</div><div class="metric-sub">${periodLabels[period]}</div></div>
-    <div class="metric-card"><div class="metric-label">Followed up</div><div class="metric-value blue">${followedUpCount.toLocaleString('en-IN')}</div><div class="metric-sub">Leads with activity</div></div>
+    <div class="metric-card"><div class="metric-label">Followed up</div><div class="metric-value" style="color:var(--blue)">${followedUpCount.toLocaleString('en-IN')}</div><div class="metric-sub">Leads with activity</div></div>
     <div class="metric-card"><div class="metric-label">Conversion rate</div><div class="metric-value green">${conv}%</div><div class="metric-sub">${won.length} closed</div></div>
     <div class="metric-card"><div class="metric-label">Pipeline value</div><div class="metric-value amber">₹${formatINR(totalVal)}</div><div class="metric-sub">Estimated retainers</div></div>`;
 
-  // ── DATE FILTER TABS ──
-  const filterHtml = `<div class="dash-period-tabs">
+  // Period filter tabs
+  const filterEl=document.getElementById('dash-period-filter');
+  if(filterEl)filterEl.innerHTML=`<div class="dash-period-tabs">
     ${['today','week','month','quarter','all'].map(p=>`<button class="dash-period-btn ${period===p?'active':''}" onclick="setDashPeriod('${p}')">${periodLabels[p]}</button>`).join('')}
   </div>`;
-  const filterEl = document.getElementById('dash-period-filter');
-  if(filterEl) filterEl.innerHTML = filterHtml;
 
-  // ── STAGE BARS ──
-  const max=Math.max(...STAGES.map(s=>filteredLeads.filter(l=>l.stage===s).length),1);
-  document.getElementById('stage-bars').innerHTML=STAGES.map(s=>{const c=filteredLeads.filter(l=>l.stage===s).length;return`<div class="stage-bar-row"><span class="stage-bar-label" style="width:110px">${s}</span><div class="stage-bar-track"><div class="stage-bar-fill" style="width:${Math.round(c/max*100)}%;background:${STAGE_COLORS[s]}"></div></div><span class="stage-bar-count">${c}</span></div>`;}).join('');
+  // Stage bars
+  const maxS=Math.max(...STAGES.map(s=>filteredLeads.filter(l=>l.stage===s).length),1);
+  document.getElementById('stage-bars').innerHTML=STAGES.map(s=>{const c=filteredLeads.filter(l=>l.stage===s).length;return`<div class="stage-bar-row"><span class="stage-bar-label" style="width:110px">${s}</span><div class="stage-bar-track"><div class="stage-bar-fill" style="width:${Math.round(c/maxS*100)}%;background:${STAGE_COLORS[s]}"></div></div><span class="stage-bar-count">${c}</span></div>`;}).join('');
 
-  // ── SOURCE CHART ──
+  // Source chart
   const srcMap={};filteredLeads.forEach(l=>{if(l.source){const src=l.source.trim();srcMap[src]=(srcMap[src]||0)+1;}});
   document.getElementById('source-chart').innerHTML=Object.entries(srcMap).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([s,c])=>`<div class="source-row"><span>${s}</span><span class="source-pill">${c}</span></div>`).join('')||'<div class="empty-state">No source data yet</div>';
 
-  // ── LEADS CREATED CHART ──
-  const buckets = getChartBuckets(period);
-  const createdCounts = {};
+  // Charts
+  const buckets=getChartBuckets(period);
+  const createdCounts={};
   buckets.forEach(b=>createdCounts[b.key]=0);
-  filteredLeads.forEach(l=>{
-    const key = getItemKey(l.created_at, period);
-    if(key in createdCounts) createdCounts[key]++;
-  });
- renderBarChart('leads-created-chart-inner', buckets, createdCounts, '#6366F1');
-  }
+  filteredLeads.forEach(l=>{const key=getItemKey(l.created_at,period);if(key in createdCounts)createdCounts[key]++;});
+  renderBarChart('leads-created-chart-inner',buckets,createdCounts,'#6366F1');
 
-  // ── LEADS FOLLOWED UP CHART ──
-  const followupCounts = {};
-  buckets.forEach(b=>followupCounts[b.key]=0);
-  // Count unique leads followed up per bucket
-  const bucketLeadSets = {};
-  buckets.forEach(b=>bucketLeadSets[b.key]=new Set());
-  filteredActivities.forEach(a=>{
-    if(!a.lead_id) return;
-    const key = getItemKey(a.created_at, period);
-    if(key in bucketLeadSets) bucketLeadSets[key].add(a.lead_id);
-  });
+  const followupCounts={};
+  const bucketLeadSets={};
+  buckets.forEach(b=>{followupCounts[b.key]=0;bucketLeadSets[b.key]=new Set();});
+  filteredActivities.forEach(a=>{if(!a.lead_id)return;const key=getItemKey(a.created_at,period);if(key in bucketLeadSets)bucketLeadSets[key].add(a.lead_id);});
   buckets.forEach(b=>followupCounts[b.key]=bucketLeadSets[b.key].size);
- renderBarChart('leads-followup-chart-inner', buckets, followupCounts, '#10B981');
-  }
+  renderBarChart('leads-followup-chart-inner',buckets,followupCounts,'#10B981');
 
-  // ── FOLLOW-UPS TODAY ──
+  // Follow-ups today
   const due=allLeads.filter(l=>l.followup_date===today);
   document.getElementById('followups-today').innerHTML=due.length?due.slice(0,5).map(l=>`<div class="followup-row"><div><div class="followup-name">${l.name}</div><div class="followup-company">${l.company||''}</div></div><button class="btn-sm" onclick="openLeadDetail('${l.id}')">View</button></div>`).join(''):'<div class="empty-state"><div class="empty-state-icon">✓</div>No follow-ups today</div>';
 
-  // ── TEAM PERFORMANCE ──
+  // Team performance
   const perfMap={};filteredLeads.forEach(l=>{if(!l.assigned_to)return;const prof=state.profiles.find(p=>p.id===l.assigned_to);const name=prof?.name||'Unknown';if(!perfMap[name])perfMap[name]={total:0,won:0};perfMap[name].total++;if(l.stage==='Closed')perfMap[name].won++;});
   document.getElementById('team-perf').innerHTML=Object.entries(perfMap).sort((a,b)=>b[1].total-a[1].total).map(([name,p])=>`<div class="team-row"><span style="font-weight:500">${name}</span><div class="team-stats"><div class="team-stat"><div class="team-stat-num">${p.total}</div><div class="team-stat-lbl">Leads</div></div><div class="team-stat"><div class="team-stat-num">${p.won}</div><div class="team-stat-lbl">Closed</div></div><div class="team-stat"><div class="team-stat-num">${p.total?Math.round(p.won/p.total*100):0}%</div><div class="team-stat-lbl">Conv.</div></div></div></div>`).join('')||'<div class="empty-state">Assign leads to see stats</div>';
 }
 
-function setDashPeriod(period) {
-  state.dashPeriod = period;
-  renderDashboard();
-}
-window.setDashPeriod = setDashPeriod;
+function setDashPeriod(period){state.dashPeriod=period;renderDashboard();}
 
 function populateSelects(){
   const svcs=state.config.services||[];
@@ -507,51 +481,36 @@ function importCSV(event){
       company:['company','business','company name'],
       email:['email','email address'],
       phone:['phone','mobile','contact number','phone number'],
-      stage:['stage'],
-      type:['type'],
+      stage:['stage'],type:['type'],
       service:['service','service interest'],
       source:['source','lead source'],
       value:['value','deal value','amount'],
       city:['city','location'],
     };
     const colIndex={};
-    Object.entries(fieldMap).forEach(([key,aliases])=>{
-      const idx=headers.findIndex(h=>aliases.includes(h));
-      if(idx!==-1)colIndex[key]=idx;
-    });
-    const rows=lines.slice(1).map(line=>{
-      const cells=line.match(/("([^"]|"")*"|[^,]*)/g)?.map(c=>c.replace(/^"|"$/g,'').replace(/""/g,'"').trim())||[];
-      return cells;
-    });
-    const toInsert=rows
-      .filter(r=>r.length>=1&&r[colIndex.name??0]?.trim())
-      .map(r=>({
-        name:(r[colIndex.name]||'Unknown').trim(),
-        company:(r[colIndex.company]!=null?r[colIndex.company]:'').trim(),
-        email:(r[colIndex.email]!=null?r[colIndex.email]:'').trim(),
-        phone:(r[colIndex.phone]!=null?r[colIndex.phone]:'').trim(),
-        stage:STAGES.includes((r[colIndex.stage]||'').trim())?(r[colIndex.stage]||'').trim():(r[colIndex.stage]||'').trim()==='Fresh'?'Fresh Lead':'Fresh Lead',
-        type:(r[colIndex.type]||'').trim()==='Client'?'Client':'Prospect',
-        service:(r[colIndex.service]!=null?r[colIndex.service]:'').trim(),
-        source:(r[colIndex.source]!=null?r[colIndex.source]:'').trim(),
-        value:+(r[colIndex.value]||0)||0,
-        city:(r[colIndex.city]!=null?r[colIndex.city]:'').trim(),
-        created_by:state.user.id,
-      }));
+    Object.entries(fieldMap).forEach(([key,aliases])=>{const idx=headers.findIndex(h=>aliases.includes(h));if(idx!==-1)colIndex[key]=idx;});
+    const rows=lines.slice(1).map(line=>{const cells=line.match(/("([^"]|"")*"|[^,]*)/g)?.map(c=>c.replace(/^"|"$/g,'').replace(/""/g,'"').trim())||[];return cells;});
+    const toInsert=rows.filter(r=>r.length>=1&&r[colIndex.name??0]?.trim()).map(r=>({
+      name:(r[colIndex.name]||'Unknown').trim(),
+      company:(r[colIndex.company]!=null?r[colIndex.company]:'').trim(),
+      email:(r[colIndex.email]!=null?r[colIndex.email]:'').trim(),
+      phone:(r[colIndex.phone]!=null?r[colIndex.phone]:'').trim(),
+      stage:STAGES.includes((r[colIndex.stage]||'').trim())?(r[colIndex.stage]||'').trim():(r[colIndex.stage]||'').trim()==='Fresh'?'Fresh Lead':'Fresh Lead',
+      type:(r[colIndex.type]||'').trim()==='Client'?'Client':'Prospect',
+      service:(r[colIndex.service]!=null?r[colIndex.service]:'').trim(),
+      source:(r[colIndex.source]!=null?r[colIndex.source]:'').trim(),
+      value:+(r[colIndex.value]||0)||0,
+      city:(r[colIndex.city]!=null?r[colIndex.city]:'').trim(),
+      created_by:state.user.id,
+    }));
     if(!toInsert.length){alert('No valid rows found in CSV.');return;}
     if(!confirm(`Import ${toInsert.length} leads?`))return;
     let imported=0,errors=0;
-    for(let i=0;i<toInsert.length;i+=100){
-      const batch=toInsert.slice(i,i+100);
-      const{error}=await db.from('leads').insert(batch);
-      if(error){console.error('Batch error:',error);errors+=batch.length;}
-      else{imported+=batch.length;}
-    }
+    for(let i=0;i<toInsert.length;i+=100){const batch=toInsert.slice(i,i+100);const{error}=await db.from('leads').insert(batch);if(error){console.error('Batch error:',error);errors+=batch.length;}else{imported+=batch.length;}}
     await loadLeads();renderLeads();renderDashboard();
     alert(errors>0?`Imported ${imported} leads.\n${errors} rows failed.`:`✓ Imported ${imported} leads successfully!`);
   };
-  reader.readAsText(file);
-  event.target.value='';
+  reader.readAsText(file);event.target.value='';
 }
 
 async function inviteTeamMember(){const email=document.getElementById('invite-email').value.trim();if(!email)return;alert(`Create their account from Supabase dashboard → Auth → Users → Invite user.\n\nEmail: ${email}`);document.getElementById('invite-email').value='';}
