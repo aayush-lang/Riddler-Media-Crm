@@ -130,7 +130,6 @@ function renderBarChart(containerId,buckets,counts,color){
   const container=document.getElementById(containerId);
   if(!container)return;
   const showEvery=buckets.length>15?Math.ceil(buckets.length/10):1;
-
   let barsHtml='';
   for(let i=0;i<buckets.length;i++){
     const b=buckets[i];
@@ -144,7 +143,6 @@ function renderBarChart(containerId,buckets,counts,color){
       +'<span style="font-size:9px;color:var(--text-3);position:absolute;bottom:-18px;white-space:nowrap;'+(showLabel?'':'visibility:hidden')+'">'+b.label+'</span>'
       +'</div>';
   }
-
   container.innerHTML=
     '<div style="display:flex;gap:2px;margin-bottom:4px">'
     +'<div style="width:24px;display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;padding-bottom:20px">'
@@ -160,9 +158,7 @@ function renderBarChart(containerId,buckets,counts,color){
     +'</div>'
     +'<div style="display:flex;align-items:flex-end;gap:3px;height:120px;padding-bottom:20px;position:relative">'
     +barsHtml
-    +'</div>'
-    +'</div>'
-    +'</div>';
+    +'</div></div></div>';
 }
 
 function renderDashboard(){
@@ -187,9 +183,7 @@ function renderDashboard(){
   const filterEl=document.getElementById('dash-period-filter');
   if(filterEl){
     let tabsHtml='<div class="dash-period-tabs">';
-    ['today','week','month','quarter','all'].forEach(function(p){
-      tabsHtml+='<button class="dash-period-btn '+(period===p?'active':'')+'" onclick="setDashPeriod(\''+p+'\')">'+periodLabels[p]+'</button>';
-    });
+    ['today','week','month','quarter','all'].forEach(function(p){tabsHtml+='<button class="dash-period-btn '+(period===p?'active':'')+'" onclick="setDashPeriod(\''+p+'\')">'+periodLabels[p]+'</button>';});
     tabsHtml+='</div>';
     filterEl.innerHTML=tabsHtml;
   }
@@ -387,7 +381,6 @@ async function openLeadDetail(id){
   const actsHtml=(acts||[]).map(a=>'<div class="activity-item"><div class="activity-dot '+a.type+'"></div><div class="activity-content"><div class="activity-text">'+(a.type==='comment'?'💬 ':'')+esc(a.text)+'</div><div class="activity-author">'+(a.user?.name||'System')+' · '+formatDateTime(a.created_at)+'</div></div></div>').join('')||'<div style="font-size:13px;color:var(--text-3)">No activity yet</div>';
   const stageButtons=STAGES.map(s=>'<button class="stage-switch-btn '+(l.stage===s?'active':'')+'" onclick="changeStageFromPanel(\''+l.id+'\',\''+s+'\')" style="'+(l.stage===s?'background:'+STAGE_COLORS[s]+';border-color:'+STAGE_COLORS[s]+';color:white':'')+'">'+s+'</button>').join('');
   const profileOpts=state.profiles.map(p=>'<option value="'+p.id+'" '+(p.id===l.assigned_to?'selected':'')+'>'+p.name+'</option>').join('');
-
   document.getElementById('lead-detail-panel').innerHTML=
     '<div class="panel-header"><div>'
     +'<div style="font-size:17px;font-weight:600">'+esc(l.name)+'</div>'
@@ -458,18 +451,47 @@ async function sendReminderEmail(reminder,lead){if(!RESEND_API_KEY||RESEND_API_K
 
 function exportCSV(){const headers=['Name','Company','Email','Phone','Stage','Type','Service','Source','Value','City','Follow-up Date','Created On','Notes'];const rows=state.leads.map(l=>[l.name,l.company,l.email,l.phone,l.stage,l.type,l.service,l.source,l.value,l.city,l.followup_date,l.created_at?.split('T')[0],l.notes].map(v=>'"'+(v||'').toString().replace(/"/g,'""')+'"').join(','));const csv=[headers.join(','),...rows].join('\n');const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);a.download='riddler_leads_'+new Date().toISOString().split('T')[0]+'.csv';a.click();}
 
+function parseCSVLine(line){
+  const cells=[];
+  let cur='',inQ=false;
+  for(let i=0;i<=line.length;i++){
+    const ch=line[i];
+    if(ch==='"'&&!inQ){inQ=true;}
+    else if(ch==='"'&&inQ&&line[i+1]==='"'){cur+='"';i++;}
+    else if(ch==='"'&&inQ){inQ=false;}
+    else if((ch===','||i===line.length)&&!inQ){cells.push(cur.trim());cur='';}
+    else{cur+=ch||'';}
+  }
+  return cells;
+}
+
 function importCSV(event){
   const file=event.target.files[0];if(!file)return;
   const reader=new FileReader();
   reader.onload=async function(e){
     const lines=e.target.result.split('\n').filter(l=>l.trim());
-    const headers=lines[0].match(/("([^"]|"")*"|[^,]*)/g)?.map(h=>h.replace(/^"|"$/g,'').toLowerCase().trim())||[];
-    const fieldMap={name:['name','full name','contact name'],company:['company','business','company name'],email:['email','email address'],phone:['phone','mobile','contact number','phone number'],stage:['stage'],type:['type'],service:['service','service interest'],source:['source','lead source'],value:['value','deal value','amount'],city:['city','location'],followup_date:['follow-up date','followup date','follow up date','follow-up'],notes:['notes','note','comments']};
+    const headers=parseCSVLine(lines[0]).map(h=>h.toLowerCase().trim());
+    const fieldMap={
+      name:['name','full name','contact name'],
+      company:['company','business','company name'],
+      email:['email','email address'],
+      phone:['phone','mobile','contact number','phone number'],
+      stage:['stage'],
+      type:['type'],
+      service:['service','service interest'],
+      source:['source','lead source'],
+      value:['value','deal value','amount'],
+      city:['city','location'],
+      followup_date:['follow-up date','followup date','follow up date','follow-up'],
+      notes:['notes','note','comments'],
+    };
     const colIndex={};
-    Object.entries(fieldMap).forEach(function(entry){const key=entry[0];const aliases=entry[1];const idx=headers.findIndex(h=>aliases.includes(h));if(idx!==-1)colIndex[key]=idx;});
-    const rows=lines.slice(1).map(line=>{const cells=line.match(/("([^"]|"")*"|[^,]*)/g)?.map(c=>c.replace(/^"|"$/g,'').replace(/""/g,'"').trim())||[];return cells;});
-  return cells;
-});
+    Object.entries(fieldMap).forEach(function(entry){
+      const key=entry[0];const aliases=entry[1];
+      const idx=headers.findIndex(h=>aliases.includes(h));
+      if(idx!==-1)colIndex[key]=idx;
+    });
+    const rows=lines.slice(1).map(line=>parseCSVLine(line));
     const toInsert=rows.filter(r=>r.length>=1&&r[colIndex.name||0]?.trim()).map(r=>({
       name:(r[colIndex.name]||'Unknown').trim(),
       company:(r[colIndex.company]!=null?r[colIndex.company]:'').trim(),
@@ -488,7 +510,12 @@ function importCSV(event){
     if(!toInsert.length){alert('No valid rows found in CSV.');return;}
     if(!confirm('Import '+toInsert.length+' leads?'))return;
     let imported=0,errors=0;
-    for(let i=0;i<toInsert.length;i+=100){const batch=toInsert.slice(i,i+100);const result=await db.from('leads').insert(batch);if(result.error){console.error('Batch error:',result.error);errors+=batch.length;}else{imported+=batch.length;}}
+    for(let i=0;i<toInsert.length;i+=100){
+      const batch=toInsert.slice(i,i+100);
+      const result=await db.from('leads').insert(batch);
+      if(result.error){console.error('Batch error:',result.error);errors+=batch.length;}
+      else{imported+=batch.length;}
+    }
     await loadLeads();renderLeads();renderDashboard();
     alert(errors>0?'Imported '+imported+' leads.\n'+errors+' rows failed.':'✓ Imported '+imported+' leads successfully!');
   };
