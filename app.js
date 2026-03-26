@@ -464,20 +464,10 @@ function importCSV(event){
   reader.onload=async function(e){
     const lines=e.target.result.split('\n').filter(l=>l.trim());
     const headers=lines[0].match(/("([^"]|"")*"|[^,]*)/g)?.map(h=>h.replace(/^"|"$/g,'').toLowerCase().trim())||[];
-    const fieldMap={name:['name','full name','contact name'],company:['company','business','company name'],email:['email','email address'],phone:['phone','mobile','contact number','phone number'],stage:['stage'],type:['type'],service:['service','service interest'],source:['source','lead source'],value:['value','deal value','amount'],city:['city','location'],notes:['notes','note','comments']};
+    const fieldMap={name:['name','full name','contact name'],company:['company','business','company name'],email:['email','email address'],phone:['phone','mobile','contact number','phone number'],stage:['stage'],type:['type'],service:['service','service interest'],source:['source','lead source'],value:['value','deal value','amount'],city:['city','location'],followup_date:['follow-up date','followup date','follow up date','follow-up'],notes:['notes','note','comments']};
     const colIndex={};
     Object.entries(fieldMap).forEach(function(entry){const key=entry[0];const aliases=entry[1];const idx=headers.findIndex(h=>aliases.includes(h));if(idx!==-1)colIndex[key]=idx;});
-    const rows=lines.slice(1).map(line=>{
-  const cells=[];
-  let cur='',inQ=false;
-  for(let i=0;i<=line.length;i++){
-    const ch=line[i];
-    if(ch==='"'&&!inQ){inQ=true;}
-    else if(ch==='"'&&inQ&&line[i+1]==='"'){cur+='"';i++;}
-    else if(ch==='"'&&inQ){inQ=false;}
-    else if((ch===','||i===line.length)&&!inQ){cells.push(cur.trim());cur='';}
-    else{cur+=ch||'';}
-  }
+    const rows=lines.slice(1).map(line=>{const cells=line.match(/("([^"]|"")*"|[^,]*)/g)?.map(c=>c.replace(/^"|"$/g,'').replace(/""/g,'"').trim())||[];return cells;});
   return cells;
 });
     const toInsert=rows.filter(r=>r.length>=1&&r[colIndex.name||0]?.trim()).map(r=>({
@@ -491,6 +481,7 @@ function importCSV(event){
       source:(r[colIndex.source]!=null?r[colIndex.source]:'').trim(),
       value:+(r[colIndex.value]||0)||0,
       city:(r[colIndex.city]!=null?r[colIndex.city]:'').trim(),
+      followup_date:(r[colIndex.followup_date]||'').trim()||null,
       notes:(r[colIndex.notes]!=null?r[colIndex.notes]:'').trim(),
       created_by:state.user.id,
     }));
