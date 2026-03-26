@@ -6,12 +6,12 @@ const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
 });
 
-const STAGES = ['Fresh Lead','Contacted','Interested','Brief Expected','Brief Received','Plan Shared','Closed','Not Interested','In House Team'];
+const STAGES = ['Fresh Lead','Contacted','Interested','Brief Expected','Brief Received','Plan Shared','Closed','Not Interested','In House Team','DNP'];
 const SOURCES = ['Ads','LinkedIn','Apollo','Naukri','Shopify','Website','Referral','WhatsApp','Other'];
 const STAGE_COLORS = {
   'Fresh Lead':'#6366F1','Contacted':'#3B82F6','Interested':'#10B981',
   'Brief Expected':'#F59E0B','Brief Received':'#F97316','Plan Shared':'#8B5CF6',
-  'Closed':'#22C55E','Not Interested':'#EF4444','In House Team':'#64748B'
+  'Closed':'#22C55E','Not Interested':'#EF4444','In House Team':'#64748B','DNP':'#DC2626'
 };
 
 let state = {
