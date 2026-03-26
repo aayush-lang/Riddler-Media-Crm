@@ -464,7 +464,7 @@ function importCSV(event){
   reader.onload=async function(e){
     const lines=e.target.result.split('\n').filter(l=>l.trim());
     const headers=lines[0].match(/("([^"]|"")*"|[^,]*)/g)?.map(h=>h.replace(/^"|"$/g,'').toLowerCase().trim())||[];
-    const fieldMap={name:['name','full name','contact name'],company:['company','business','company name'],email:['email','email address'],phone:['phone','mobile','contact number','phone number'],stage:['stage'],type:['type'],service:['service','service interest'],source:['source','lead source'],value:['value','deal value','amount'],city:['city','location']};
+    const fieldMap={name:['name','full name','contact name'],company:['company','business','company name'],email:['email','email address'],phone:['phone','mobile','contact number','phone number'],stage:['stage'],type:['type'],service:['service','service interest'],source:['source','lead source'],value:['value','deal value','amount'],city:['city','location'],notes:['notes','note','comments']};
     const colIndex={};
     Object.entries(fieldMap).forEach(function(entry){const key=entry[0];const aliases=entry[1];const idx=headers.findIndex(h=>aliases.includes(h));if(idx!==-1)colIndex[key]=idx;});
     const rows=lines.slice(1).map(line=>{const cells=line.match(/("([^"]|"")*"|[^,]*)/g)?.map(c=>c.replace(/^"|"$/g,'').replace(/""/g,'"').trim())||[];return cells;});
@@ -479,6 +479,7 @@ function importCSV(event){
       source:(r[colIndex.source]!=null?r[colIndex.source]:'').trim(),
       value:+(r[colIndex.value]||0)||0,
       city:(r[colIndex.city]!=null?r[colIndex.city]:'').trim(),
+      notes:(r[colIndex.notes]!=null?r[colIndex.notes]:'').trim(),
       created_by:state.user.id,
     }));
     if(!toInsert.length){alert('No valid rows found in CSV.');return;}
