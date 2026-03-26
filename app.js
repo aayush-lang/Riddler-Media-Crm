@@ -130,17 +130,33 @@ function renderBarChart(containerId,buckets,counts,color){
   const container=document.getElementById(containerId);
   if(!container)return;
   const showEvery=buckets.length>15?Math.ceil(buckets.length/10):1;
-  container.innerHTML=`<div style="display:flex;align-items:flex-end;gap:3px;height:100px;padding-bottom:20px;position:relative">
-    ${buckets.map((b,i)=>{
-      const val=counts[b.key]||0;
-      const h=max>0?Math.round((val/max)*80):0;
-      const showLabel=i%showEvery===0;
-      return`<div style="flex:1;display:flex;flex-direction:column;align-items:center;position:relative">
-        <div title="${b.label}: ${val}" style="width:100%;background:${color};border-radius:3px 3px 0 0;height:${h}px;min-height:${val>0?2:0}px;transition:height 0.3s"></div>
-        <span style="font-size:9px;color:var(--text-3);position:absolute;bottom:-18px;white-space:nowrap;${showLabel?'':'visibility:hidden'}">${b.label}</span>
-      </div>`;
-    }).join('')}
-  </div>`;
+  container.innerHTML=`
+    <div style="display:flex;gap:2px;margin-bottom:4px">
+      <div style="width:24px;display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;padding-bottom:20px">
+        <span style="font-size:9px;color:var(--text-3)">${max}</span>
+        <span style="font-size:9px;color:var(--text-3)">${Math.round(max/2)}</span>
+        <span style="font-size:9px;color:var(--text-3)">0</span>
+      </div>
+      <div style="flex:1;position:relative">
+        <div style="position:absolute;top:0;left:0;right:0;bottom:20px;display:flex;flex-direction:column;justify-content:space-between;pointer-events:none">
+          <div style="border-top:1px dashed var(--border);width:100%"></div>
+          <div style="border-top:1px dashed var(--border);width:100%"></div>
+          <div style="border-top:1px solid var(--border);width:100%"></div>
+        </div>
+        <div style="display:flex;align-items:flex-end;gap:3px;height:120px;padding-bottom:20px;position:relative">
+          ${buckets.map((b,i)=>{
+            const val=counts[b.key]||0;
+            const h=max>0?Math.round((val/max)*90):0;
+            const showLabel=i%showEvery===0;
+            return\`<div style="flex:1;display:flex;flex-direction:column;align-items:center;position:relative">
+              \${val>0?\`<span style="font-size:8px;color:var(--text-2);margin-bottom:2px">\${val}</span>\`:\`<span style="font-size:8px;color:transparent">0</span>\`}
+              <div title="\${b.label}: \${val}" style="width:100%;background:${color};border-radius:3px 3px 0 0;height:\${h}px;min-height:\${val>0?2:0}px;transition:height 0.3s"></div>
+              <span style="font-size:9px;color:var(--text-3);position:absolute;bottom:-18px;white-space:nowrap;\${showLabel?'':'visibility:hidden'}">\${b.label}</span>
+            </div>\`;
+          }).join('')}
+        </div>
+      </div>
+    </div>`;
 }
 
 function renderDashboard(){
