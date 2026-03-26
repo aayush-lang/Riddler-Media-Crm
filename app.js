@@ -467,7 +467,19 @@ function importCSV(event){
     const fieldMap={name:['name','full name','contact name'],company:['company','business','company name'],email:['email','email address'],phone:['phone','mobile','contact number','phone number'],stage:['stage'],type:['type'],service:['service','service interest'],source:['source','lead source'],value:['value','deal value','amount'],city:['city','location'],notes:['notes','note','comments']};
     const colIndex={};
     Object.entries(fieldMap).forEach(function(entry){const key=entry[0];const aliases=entry[1];const idx=headers.findIndex(h=>aliases.includes(h));if(idx!==-1)colIndex[key]=idx;});
-    const rows=lines.slice(1).map(line=>{const cells=line.match(/("([^"]|"")*"|[^,]*)/g)?.map(c=>c.replace(/^"|"$/g,'').replace(/""/g,'"').trim())||[];return cells;});
+    const rows=lines.slice(1).map(line=>{
+  const cells=[];
+  let cur='',inQ=false;
+  for(let i=0;i<=line.length;i++){
+    const ch=line[i];
+    if(ch==='"'&&!inQ){inQ=true;}
+    else if(ch==='"'&&inQ&&line[i+1]==='"'){cur+='"';i++;}
+    else if(ch==='"'&&inQ){inQ=false;}
+    else if((ch===','||i===line.length)&&!inQ){cells.push(cur.trim());cur='';}
+    else{cur+=ch||'';}
+  }
+  return cells;
+});
     const toInsert=rows.filter(r=>r.length>=1&&r[colIndex.name||0]?.trim()).map(r=>({
       name:(r[colIndex.name]||'Unknown').trim(),
       company:(r[colIndex.company]!=null?r[colIndex.company]:'').trim(),
