@@ -216,7 +216,20 @@ async function bulkAssignUnassigned() {
 
 async function loadConfig(){const{data}=await db.from('config').select('*');if(data){data.forEach(row=>{state.config[row.key]=row.value;});}state.config.stages=STAGES;state.config.sources=SOURCES;populateSelects();}
 async function loadProfiles(){const{data}=await db.from('profiles').select('*').order('name');if(data)state.profiles=data;populateAssignedSelects();}
-async function loadLeads(){const{data,error}=await db.from('leads').select('*, assigned_profile:profiles!leads_assigned_to_fkey(name,avatar_initials)').order(state.sortCol,{ascending:state.sortDir==='asc'});if(!error&&data){state.leads=data;applyFilters();}}
+async function loadLeads(){
+  let all=[];let from=0;const chunk=1000;
+  while(true){
+    const{data,error}=await db.from('leads')
+      .select('*, assigned_profile:profiles!leads_assigned_to_fkey(name,avatar_initials)')
+      .order(state.sortCol,{ascending:state.sortDir==='asc'})
+      .range(from,from+chunk-1);
+    if(error||!data||!data.length)break;
+    all=[...all,...data];
+    if(data.length<chunk)break;
+    from+=chunk;
+  }
+  state.leads=all;applyFilters();
+}
 async function loadReminders(){const{data}=await db.from('reminders').select('*, lead:leads(name,company), assignee:profiles!reminders_assigned_to_fkey(name)').order('due_date',{ascending:true}).order('due_time',{ascending:true});if(data){state.reminders=data;updateReminderBadge();}}
 async function loadActivities(){const{data}=await db.from('activities').select('*').order('created_at',{ascending:true});if(data)state.activities=data;}
 
