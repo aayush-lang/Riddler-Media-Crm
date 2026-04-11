@@ -291,3 +291,5 @@ body { font-family: 'DM Sans', system-ui, sans-serif; font-size: 14px; color: va
 .dash-period-btn:hover { border-color:var(--purple); color:var(--purple); }
 .dash-period-btn.active { background:var(--purple); color:white; border-color:var(--purple); font-weight:500; }
 .metric-value.blue { color: var(--blue); }
+.inbound-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; margin-bottom: 12px; box-shadow: var(--shadow); }
+.inbound-card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; }
