@@ -1,11 +1,9 @@
 import { SUPABASE_URL, SUPABASE_ANON_KEY, RESEND_API_KEY, FROM_EMAIL } from './supabase.js';
 import { initBriefs } from './briefs.js';
-
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false }
 });
-
 const STAGES = ['Fresh Lead','Contacted','Interested','Brief Expected','Brief Received','Plan Shared','Closed','Not Interested','In House Team','DNP'];
 const SOURCES = ['Ads','LinkedIn','Apollo','Naukri','Shopify','Website','Referral','WhatsApp','Other'];
 const STAGE_COLORS = {
@@ -13,27 +11,22 @@ const STAGE_COLORS = {
   'Brief Expected':'#F59E0B','Brief Received':'#F97316','Plan Shared':'#8B5CF6',
   'Closed':'#22C55E','Not Interested':'#EF4444','In House Team':'#64748B','DNP':'#DC2626'
 };
-
 let state = {
   user:null,profile:null,profiles:[],leads:[],filteredLeads:[],reminders:[],briefs:[],
-  activities:[],
+  activities:[],inboundLeads:[],
   config:{services:[],sources:SOURCES,stages:STAGES},
   page:1,pageSize:20,sortCol:'created_at',sortDir:'desc',
   selectedLeads:new Set(),currentReminderFilter:'pending',
   editLeadId:null,editReminderId:null,activeView:'dashboard',filterDebounce:null,
   dashPeriod:'all',
-  // admin filter state
-  adminLeadFilter: '',   // profile id or '' for all
+  adminLeadFilter: '',
   adminBriefFilter: '',
   adminReminderFilter: '',
   adminDashFilter: '',
 };
-
 let briefsModule = null;
-
 // ── HELPERS ──
 function isAdmin() { return state.profile?.role === 'admin'; }
-
 function visibleLeads() {
   if (isAdmin()) {
     if (state.adminLeadFilter) return state.leads.filter(l => l.assigned_to === state.adminLeadFilter);
@@ -41,7 +34,6 @@ function visibleLeads() {
   }
   return state.leads.filter(l => l.assigned_to === state.user.id);
 }
-
 function visibleReminders() {
   if (isAdmin()) {
     if (state.adminReminderFilter) return state.reminders.filter(r => r.assigned_to === state.adminReminderFilter);
@@ -49,7 +41,6 @@ function visibleReminders() {
   }
   return state.reminders.filter(r => r.assigned_to === state.user.id);
 }
-
 function visibleBriefs() {
   if (isAdmin()) {
     if (state.adminBriefFilter) return state.briefs.filter(b => b.created_by === state.adminBriefFilter);
@@ -57,7 +48,6 @@ function visibleBriefs() {
   }
   return state.briefs.filter(b => b.created_by === state.user.id);
 }
-
 function dashLeads() {
   if (isAdmin()) {
     if (state.adminDashFilter) return state.leads.filter(l => l.assigned_to === state.adminDashFilter);
@@ -65,7 +55,6 @@ function dashLeads() {
   }
   return state.leads.filter(l => l.assigned_to === state.user.id);
 }
-
 // ── AUTH ──
 async function handleLogin() {
   const email=document.getElementById('login-email').value.trim();
@@ -85,7 +74,6 @@ async function handleLogin() {
 async function handleLogout(){await db.auth.signOut();document.getElementById('app').style.display='none';document.getElementById('auth-screen').style.display='flex';state.user=null;}
 function showAuthError(msg){const el=document.getElementById('auth-error');el.textContent=msg;el.style.display='block';}
 function showForgot(){const email=prompt('Enter your registered email:');if(!email)return;db.auth.resetPasswordForEmail(email).then(()=>alert('Password reset email sent!'));}
-
 async function initApp(user) {
   state.user=user;
   const{data:prof}=await db.from('profiles').select('*').eq('id',user.id).single();
@@ -94,18 +82,14 @@ async function initApp(user) {
   document.getElementById('user-avatar').textContent=prof?.avatar_initials||'?';
   document.getElementById('auth-screen').style.display='none';
   document.getElementById('app').style.display='flex';
-  await Promise.all([loadConfig(),loadProfiles(),loadLeads(),loadReminders(),loadActivities()]);
+  await Promise.all([loadConfig(),loadProfiles(),loadLeads(),loadReminders(),loadActivities(),loadInbound()]);
   renderDashboard();renderLeads();renderReminders();
-
   briefsModule = initBriefs(db, state, esc, formatDate, isAdmin, visibleBriefs);
   await briefsModule.loadBriefs();
   briefsModule.renderBriefs();
   const isPublic = await briefsModule.checkPublicShare();
   if(isPublic) return;
-
-  // Inject admin filter bars
   injectAdminFilterBars();
-
   document.querySelectorAll('.nav-btn').forEach(btn=>{btn.addEventListener('click',()=>switchView(btn.dataset.view,btn));});
   document.querySelectorAll('th.sortable').forEach(th=>{th.addEventListener('click',()=>handleSort(th.dataset.col));});
   document.getElementById('dash-date').textContent=new Date().toLocaleDateString('en-IN',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
@@ -115,17 +99,14 @@ async function initApp(user) {
     .on('postgres_changes',{event:'*',schema:'public',table:'leads'},()=>loadLeads().then(()=>{renderLeads();renderDashboard();}))
     .on('postgres_changes',{event:'*',schema:'public',table:'reminders'},()=>loadReminders().then(renderReminders))
     .on('postgres_changes',{event:'*',schema:'public',table:'activities'},()=>loadActivities().then(()=>renderDashboard()))
+    .on('postgres_changes',{event:'*',schema:'public',table:'leads_raw'},()=>loadInbound())
     .subscribe();
 }
-
 // ── ADMIN FILTER BARS ──
 function injectAdminFilterBars() {
   if (!isAdmin()) return;
-
   const memberOpts = () => '<option value="">All members</option>' +
     state.profiles.map(p => '<option value="' + p.id + '">' + esc(p.name) + '</option>').join('');
-
-  // Dashboard filter
   const dashFilter = document.getElementById('dash-period-filter');
   if (dashFilter) {
     const adminSel = document.createElement('div');
@@ -138,8 +119,6 @@ function injectAdminFilterBars() {
       renderDashboard();
     });
   }
-
-  // Leads view — replace the f-assigned filter to use adminLeadFilter
   const fAssigned = document.getElementById('f-assigned');
   if (fAssigned) {
     fAssigned.addEventListener('change', function() {
@@ -147,8 +126,6 @@ function injectAdminFilterBars() {
       applyFilters();
     });
   }
-
-  // Reminders admin filter
   const remHeader = document.querySelector('#view-reminders .view-header');
   if (remHeader) {
     const wrap = document.createElement('div');
@@ -160,8 +137,6 @@ function injectAdminFilterBars() {
       renderReminders();
     });
   }
-
-  // Briefs admin filter
   const briefsHeader = document.querySelector('#view-briefs .view-header');
   if (briefsHeader) {
     const wrap = document.createElement('div');
@@ -173,8 +148,6 @@ function injectAdminFilterBars() {
       briefsModule?.renderBriefs();
     });
   }
-
-  // Settings: bulk assign section
   const settingsGrid = document.querySelector('.settings-grid');
   if (settingsGrid) {
     const card = document.createElement('div');
@@ -191,7 +164,6 @@ function injectAdminFilterBars() {
     settingsGrid.appendChild(card);
   }
 }
-
 // ── BULK ASSIGN UNASSIGNED ──
 async function bulkAssignUnassigned() {
   const memberId = document.getElementById('bulk-assign-member').value;
@@ -213,7 +185,6 @@ async function bulkAssignUnassigned() {
   renderLeads();
   renderDashboard();
 }
-
 async function loadConfig(){const{data}=await db.from('config').select('*');if(data){data.forEach(row=>{state.config[row.key]=row.value;});}state.config.stages=STAGES;state.config.sources=SOURCES;populateSelects();}
 async function loadProfiles(){const{data}=await db.from('profiles').select('*').order('name');if(data)state.profiles=data;populateAssignedSelects();}
 async function loadLeads(){
@@ -233,6 +204,111 @@ async function loadLeads(){
 async function loadReminders(){const{data}=await db.from('reminders').select('*, lead:leads(name,company), assignee:profiles!reminders_assigned_to_fkey(name)').order('due_date',{ascending:true}).order('due_time',{ascending:true});if(data){state.reminders=data;updateReminderBadge();}}
 async function loadActivities(){const{data}=await db.from('activities').select('*').order('created_at',{ascending:true});if(data)state.activities=data;}
 
+// ── INBOUND LEADS ──
+async function loadInbound() {
+  const { data } = await db.from('leads_raw').select('*').order('created_at', { ascending: false });
+  state.inboundLeads = data || [];
+  updateInboundBadge();
+  if (state.activeView === 'inbound') renderInbound();
+}
+
+function updateInboundBadge() {
+  const count = (state.inboundLeads || []).length;
+  const badge = document.getElementById('inbound-count');
+  if (badge) {
+    if (count > 0) { badge.style.display = 'inline-block'; badge.textContent = count; }
+    else badge.style.display = 'none';
+  }
+  const label = document.getElementById('inbound-count-label');
+  if (label) label.textContent = count + ' leads auto-captured from LinkedIn, Reddit, Google';
+}
+
+function renderInbound() {
+  const source = document.getElementById('inbound-source-filter')?.value || '';
+  const vertical = document.getElementById('inbound-vertical-filter')?.value || '';
+  const scoreRange = document.getElementById('inbound-score-filter')?.value || '';
+
+  let items = (state.inboundLeads || []).filter(l => {
+    if (source && l.source !== source) return false;
+    if (vertical && l.vertical !== vertical) return false;
+    if (scoreRange === 'high' && (l.claude_score || 0) < 7) return false;
+    if (scoreRange === 'mid' && ((l.claude_score || 0) < 4 || (l.claude_score || 0) > 6)) return false;
+    if (scoreRange === 'low' && (l.claude_score || 0) > 3) return false;
+    return true;
+  });
+
+  const list = document.getElementById('inbound-list');
+  if (!list) return;
+
+  if (!items.length) {
+    list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📡</div><div>No inbound leads yet. The pipeline runs 5x/day automatically.</div></div>';
+    return;
+  }
+
+  list.innerHTML = items.map(l => {
+    const score = l.claude_score || 0;
+    const scoreColor = score >= 7 ? 'var(--green)' : score >= 4 ? 'var(--amber)' : 'var(--text-3)';
+    const scoreBg = score >= 7 ? 'var(--green-light)' : score >= 4 ? 'var(--amber-light)' : 'var(--surface-2)';
+    const sourceIcon = { linkedin: '💼', reddit: '🟠', twitter: '🐦', facebook: '👥', google: '🔍' }[l.source] || '🌐';
+    const date = l.created_at ? new Date(l.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
+
+    return '<div class="inbound-card">'
+      + '<div class="inbound-card-top">'
+      + '<div style="display:flex;align-items:center;gap:10px;flex:1">'
+      + '<span style="font-size:18px">' + sourceIcon + '</span>'
+      + '<div style="flex:1">'
+      + '<div style="font-size:13px;font-weight:500">' + esc(l.contact_name || 'Unknown') + (l.company ? ' · ' + esc(l.company) : '') + '</div>'
+      + '<div style="font-size:11px;color:var(--text-3);margin-top:2px">' + esc(l.source || '') + (l.vertical ? ' · ' + l.vertical : '') + ' · ' + date + '</div>'
+      + '</div>'
+      + '</div>'
+      + '<span style="background:' + scoreBg + ';color:' + scoreColor + ';font-size:12px;font-weight:600;padding:3px 10px;border-radius:12px;flex-shrink:0">' + score + '/10</span>'
+      + '</div>'
+      + '<div style="font-size:12px;color:var(--text-2);margin:10px 0;line-height:1.5;padding:10px;background:var(--surface-2);border-radius:var(--radius-sm)">' + esc((l.text_snippet || '').slice(0, 200)) + ((l.text_snippet || '').length > 200 ? '…' : '') + '</div>'
+      + (l.claude_reason ? '<div style="font-size:11px;color:var(--text-3);margin-bottom:8px">AI reason: ' + esc(l.claude_reason) + '</div>' : '')
+      + (l.draft_message ? '<div style="font-size:12px;color:var(--purple);background:var(--purple-light);padding:10px;border-radius:var(--radius-sm);margin-bottom:10px;line-height:1.5"><strong>Draft outreach:</strong> ' + esc(l.draft_message) + '</div>' : '')
+      + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
+      + (l.url ? '<a href="' + esc(l.url) + '" target="_blank" class="btn-sm">View post ↗</a>' : '')
+      + '<button class="btn-primary" style="font-size:12px;padding:5px 12px" onclick="promoteInboundLead(\'' + l.id + '\')">+ Add to CRM</button>'
+      + '<button class="btn-danger-sm" onclick="deleteInboundLead(\'' + l.id + '\')">Remove</button>'
+      + '</div>'
+      + '</div>';
+  }).join('');
+}
+
+async function promoteInboundLead(id) {
+  const lead = (state.inboundLeads || []).find(l => l.id === id);
+  if (!lead) return;
+  const payload = {
+    name: lead.contact_name || 'Unknown',
+    company: lead.company || '',
+    source: lead.source === 'linkedin' ? 'LinkedIn' : lead.source || 'Other',
+    stage: 'Fresh Lead',
+    type: 'Prospect',
+    notes: (lead.text_snippet || '').slice(0, 500) + (lead.draft_message ? '\n\nDraft outreach: ' + lead.draft_message : ''),
+    assigned_to: state.user.id,
+    created_by: state.user.id,
+  };
+  const { data } = await db.from('leads').insert(payload).select().single();
+  if (data) {
+    await db.from('activities').insert({ lead_id: data.id, user_id: state.user.id, type: 'created', text: 'Promoted from inbound lead (' + (lead.source || 'auto') + ')' });
+    await db.from('leads_raw').delete().eq('id', id);
+    state.inboundLeads = (state.inboundLeads || []).filter(l => l.id !== id);
+    updateInboundBadge();
+    renderInbound();
+    await loadLeads();
+    renderDashboard();
+    alert('✓ Added to CRM as Fresh Lead');
+  }
+}
+
+async function deleteInboundLead(id) {
+  if (!confirm('Remove this lead from inbound?')) return;
+  await db.from('leads_raw').delete().eq('id', id);
+  state.inboundLeads = (state.inboundLeads || []).filter(l => l.id !== id);
+  updateInboundBadge();
+  renderInbound();
+}
+
 function getDashRange(period){
   const now=new Date();
   const today=new Date(now.getFullYear(),now.getMonth(),now.getDate());
@@ -243,13 +319,11 @@ function getDashRange(period){
   else if(period==='quarter'){const q=Math.floor(now.getMonth()/3);start=new Date(now.getFullYear(),q*3,1);}
   return start?start.toISOString():null;
 }
-
 function filterByPeriod(items,dateField,period){
   const start=getDashRange(period);
   if(!start)return items;
   return items.filter(i=>i[dateField]&&i[dateField]>=start);
 }
-
 function getChartBuckets(period){
   const now=new Date();
   const buckets=[];
@@ -270,14 +344,12 @@ function getChartBuckets(period){
   }
   return buckets;
 }
-
 function getItemKey(isoStr,period){
   if(!isoStr)return '';
   if(period==='today')return isoStr.substring(11,13);
   if(period==='week'||period==='month')return isoStr.substring(0,10);
   return isoStr.substring(0,7);
 }
-
 function renderBarChart(containerId,buckets,counts,color){
   const max=Math.max(...Object.values(counts),1);
   const container=document.getElementById(containerId);
@@ -313,17 +385,13 @@ function renderBarChart(containerId,buckets,counts,color){
     +barsHtml
     +'</div></div></div>';
 }
-
 function renderDashboard(){
   const period=state.dashPeriod;
   const allLeads=dashLeads();
   const filteredLeads=filterByPeriod(allLeads,'created_at',period);
-
-  // activities scoped to visible leads
   const visibleLeadIds = new Set(allLeads.map(l=>l.id));
   const allActivities = (state.activities||[]).filter(a => !a.lead_id || visibleLeadIds.has(a.lead_id));
   const filteredActivities=filterByPeriod(allActivities,'created_at',period);
-
   const followedUpLeadIds=new Set(filteredActivities.map(a=>a.lead_id).filter(Boolean));
   const followedUpCount=followedUpLeadIds.size;
   const won=filteredLeads.filter(l=>l.stage==='Closed');
@@ -331,13 +399,11 @@ function renderDashboard(){
   const conv=filteredLeads.length?Math.round(won.length/filteredLeads.length*100):0;
   const today=new Date().toISOString().split('T')[0];
   const periodLabels={today:'Today',week:'This week',month:'This month',quarter:'This quarter',all:'All time'};
-
   document.getElementById('metrics-row').innerHTML=
     '<div class="metric-card"><div class="metric-label">Total leads</div><div class="metric-value purple">'+filteredLeads.length.toLocaleString('en-IN')+'</div><div class="metric-sub">'+periodLabels[period]+'</div></div>'
     +'<div class="metric-card"><div class="metric-label">Followed up</div><div class="metric-value" style="color:var(--blue)">'+followedUpCount.toLocaleString('en-IN')+'</div><div class="metric-sub">Leads with activity</div></div>'
     +'<div class="metric-card"><div class="metric-label">Conversion rate</div><div class="metric-value green">'+conv+'%</div><div class="metric-sub">'+won.length+' closed</div></div>'
     +'<div class="metric-card"><div class="metric-label">Pipeline value</div><div class="metric-value amber">₹'+formatINR(totalVal)+'</div><div class="metric-sub">Estimated retainers</div></div>';
-
   const filterEl=document.getElementById('dash-period-filter');
   if(filterEl){
     let tabsHtml='<div class="dash-period-tabs">';
@@ -345,35 +411,27 @@ function renderDashboard(){
     tabsHtml+='</div>';
     filterEl.innerHTML=tabsHtml;
   }
-
   const maxS=Math.max(...STAGES.map(s=>filteredLeads.filter(l=>l.stage===s).length),1);
   document.getElementById('stage-bars').innerHTML=STAGES.map(s=>{const c=filteredLeads.filter(l=>l.stage===s).length;return'<div class="stage-bar-row"><span class="stage-bar-label" style="width:110px">'+s+'</span><div class="stage-bar-track"><div class="stage-bar-fill" style="width:'+Math.round(c/maxS*100)+'%;background:'+STAGE_COLORS[s]+'"></div></div><span class="stage-bar-count">'+c+'</span></div>';}).join('');
-
   const srcMap={};filteredLeads.forEach(l=>{if(l.source){const src=l.source.trim();srcMap[src]=(srcMap[src]||0)+1;}});
   document.getElementById('source-chart').innerHTML=Object.entries(srcMap).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([s,c])=>'<div class="source-row"><span>'+s+'</span><span class="source-pill">'+c+'</span></div>').join('')||'<div class="empty-state">No source data yet</div>';
-
   const buckets=getChartBuckets(period);
   const createdCounts={};
   buckets.forEach(b=>{createdCounts[b.key]=0;});
   filteredLeads.forEach(l=>{const key=getItemKey(l.created_at,period);if(key in createdCounts)createdCounts[key]++;});
   renderBarChart('leads-created-chart-inner',buckets,createdCounts,'#6366F1');
-
   const followupCounts={};
   const bucketLeadSets={};
   buckets.forEach(b=>{followupCounts[b.key]=0;bucketLeadSets[b.key]=new Set();});
   filteredActivities.forEach(a=>{if(!a.lead_id)return;const key=getItemKey(a.created_at,period);if(key in bucketLeadSets)bucketLeadSets[key].add(a.lead_id);});
   buckets.forEach(b=>{followupCounts[b.key]=bucketLeadSets[b.key].size;});
   renderBarChart('leads-followup-chart-inner',buckets,followupCounts,'#10B981');
-
   const due=allLeads.filter(l=>l.followup_date===today);
   document.getElementById('followups-today').innerHTML=due.length?due.slice(0,5).map(l=>'<div class="followup-row"><div><div class="followup-name">'+l.name+'</div><div class="followup-company">'+(l.company||'')+'</div></div><button class="btn-sm" onclick="openLeadDetail(\''+l.id+'\')">View</button></div>').join(''):'<div class="empty-state"><div class="empty-state-icon">✓</div>No follow-ups today</div>';
-
   const perfMap={};filteredLeads.forEach(l=>{if(!l.assigned_to)return;const prof=state.profiles.find(p=>p.id===l.assigned_to);const name=prof?.name||'Unknown';if(!perfMap[name])perfMap[name]={total:0,won:0};perfMap[name].total++;if(l.stage==='Closed')perfMap[name].won++;});
   document.getElementById('team-perf').innerHTML=Object.entries(perfMap).sort((a,b)=>b[1].total-a[1].total).map(([name,p])=>'<div class="team-row"><span style="font-weight:500">'+name+'</span><div class="team-stats"><div class="team-stat"><div class="team-stat-num">'+p.total+'</div><div class="team-stat-lbl">Leads</div></div><div class="team-stat"><div class="team-stat-num">'+p.won+'</div><div class="team-stat-lbl">Closed</div></div><div class="team-stat"><div class="team-stat-num">'+(p.total?Math.round(p.won/p.total*100):0)+'%</div><div class="team-stat-lbl">Conv.</div></div></div></div>').join('')||'<div class="empty-state">Assign leads to see stats</div>';
 }
-
 function setDashPeriod(period){state.dashPeriod=period;renderDashboard();}
-
 function populateSelects(){
   const svcs=state.config.services||[];
   const fsvc=document.getElementById('f-service');const fsrc=document.getElementById('f-source');const fstage=document.getElementById('f-stage');
@@ -388,12 +446,9 @@ function populateSelects(){
   if(svl)svl.innerHTML=svcs.map(s=>'<span class="config-tag">'+s+'</span>').join('');
   if(sol)sol.innerHTML=SOURCES.map(s=>'<span class="config-tag">'+s+'</span>').join('');
 }
-
 function populateAssignedSelects(){
   const opts=state.profiles.map(p=>'<option value="'+p.id+'">'+p.name+'</option>').join('');
   const emptyOpt='<option value="">Unassigned</option>';
-
-  // f-assigned: admin sees all members filter; member sees only themselves (hidden)
   const fAssigned = document.getElementById('f-assigned');
   if (fAssigned) {
     if (isAdmin()) {
@@ -403,8 +458,6 @@ function populateAssignedSelects(){
       fAssigned.style.display = 'none';
     }
   }
-
-  // rf-assigned: admin sees all, member sees only themselves
   const rfAssigned = document.getElementById('rf-assigned');
   if (rfAssigned) {
     if (isAdmin()) {
@@ -413,8 +466,6 @@ function populateAssignedSelects(){
       rfAssigned.innerHTML = '<option value="' + state.user.id + '">' + (state.profile?.name || 'Me') + '</option>';
     }
   }
-
-  // lf-assigned: admin sees all, member auto-set to self
   const lfAssigned = document.getElementById('lf-assigned');
   if (lfAssigned) {
     if (isAdmin()) {
@@ -423,11 +474,9 @@ function populateAssignedSelects(){
       lfAssigned.innerHTML = '<option value="' + state.user.id + '">' + (state.profile?.name || 'Me') + '</option>';
     }
   }
-
   const tl=document.getElementById('team-list');
   if(tl)tl.innerHTML=state.profiles.map(p=>'<div class="team-member-row"><div class="tm-info"><div class="tm-avatar">'+(p.avatar_initials||'?')+'</div><div><div style="font-weight:500">'+p.name+'</div><div style="font-size:11px;color:var(--text-3)">'+p.email+'</div></div></div><span class="tm-role">'+p.role+'</span></div>').join('');
 }
-
 function switchView(viewName,btn){
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
@@ -435,21 +484,16 @@ function switchView(viewName,btn){
   btn?.classList.add('active');state.activeView=viewName;
   if(viewName==='pipeline')renderKanban();
   if(viewName==='briefs'){briefsModule?.renderBriefs();}
+  if(viewName==='inbound'){renderInbound();}
   if(viewName==='settings'){loadProfiles().then(()=>populateAssignedSelects());}
 }
-
 function applyFilters(){
   const q=(document.getElementById('search-q')?.value||'').toLowerCase();
   const stage=document.getElementById('f-stage')?.value||'';
   const type=document.getElementById('f-type')?.value||'';
   const service=document.getElementById('f-service')?.value||'';
   const source=document.getElementById('f-source')?.value||'';
-
-  // Base pool scoped to role
   let base = visibleLeads();
-
-  // Admin member filter from dropdown (already applied in visibleLeads via adminLeadFilter)
-  // but f-assigned for admin is the adminLeadFilter selector, so also apply non-admin personal filter here
   state.filteredLeads=base.filter(l=>{
     if(q&&!(l.name+l.company+l.email+l.phone+l.city).toLowerCase().includes(q))return false;
     if(stage&&l.stage!==stage)return false;
@@ -470,7 +514,6 @@ function clearFilters(){
   applyFilters();
 }
 function handleSort(col){if(state.sortCol===col){state.sortDir=state.sortDir==='asc'?'desc':'asc';}else{state.sortCol=col;state.sortDir='asc';}document.querySelectorAll('th.sortable').forEach(th=>{th.classList.remove('sort-asc','sort-desc');if(th.dataset.col===col)th.classList.add(state.sortDir==='asc'?'sort-asc':'sort-desc');});loadLeads().then(renderLeads);}
-
 function renderLeads(){
   const fl=state.filteredLeads;const total=fl.length;
   const pages=Math.max(1,Math.ceil(total/state.pageSize));
@@ -511,11 +554,8 @@ function renderLeads(){
   bulk.style.display=selCount>0?'flex':'none';
   document.getElementById('selected-count').textContent=selCount+' selected';
   document.getElementById('select-all').checked=slice.length>0&&slice.every(l=>state.selectedLeads.has(l.id));
-
-  // Render bulk reassign (admin only) in bulk actions bar
   renderBulkReassignBar();
 }
-
 function renderBulkReassignBar() {
   if (!isAdmin()) return;
   const bulk = document.getElementById('bulk-actions');
@@ -534,7 +574,6 @@ function renderBulkReassignBar() {
     bulk.appendChild(applyBtn);
   }
 }
-
 async function bulkReassign() {
   const memberId = document.getElementById('bulk-reassign-sel')?.value;
   if (!memberId || !state.selectedLeads.size) return;
@@ -547,17 +586,14 @@ async function bulkReassign() {
   renderLeads();
   renderDashboard();
 }
-
 function goPage(p){state.page=p;renderLeads();}
 function toggleSelect(id,cb){if(cb.checked)state.selectedLeads.add(id);else state.selectedLeads.delete(id);renderLeads();}
 function toggleSelectAll(cb){const fl=state.filteredLeads;const start=(state.page-1)*state.pageSize;const slice=fl.slice(start,start+state.pageSize);if(cb.checked)slice.forEach(l=>state.selectedLeads.add(l.id));else slice.forEach(l=>state.selectedLeads.delete(l.id));renderLeads();}
 async function bulkMoveStage(){const stage=document.getElementById('bulk-stage').value;if(!stage||!state.selectedLeads.size)return;const ids=[...state.selectedLeads];await db.from('leads').update({stage,updated_at:new Date().toISOString()}).in('id',ids);state.selectedLeads.clear();await loadLeads();renderLeads();renderDashboard();}
 async function bulkDelete(){if(!state.selectedLeads.size)return;if(!confirm('Delete '+state.selectedLeads.size+' leads?'))return;const ids=[...state.selectedLeads];await db.from('leads').delete().in('id',ids);state.selectedLeads.clear();await loadLeads();renderLeads();renderDashboard();}
-
 function openModal(id){document.getElementById(id).style.display='flex';}
 function closeModal(id){document.getElementById(id).style.display='none';}
 function overlayClose(e,el){if(e.target===el)el.style.display='none';}
-
 function openAddLead(){
   state.editLeadId=null;
   document.getElementById('lead-modal-title').textContent='Add new lead';
@@ -567,11 +603,9 @@ function openAddLead(){
   document.getElementById('lf-type').value='Prospect';
   document.getElementById('lf-service').value='';
   document.getElementById('lf-source').value='';
-  // Default assigned to self; admin can change
   document.getElementById('lf-assigned').value=state.user?.id||'';
   openModal('add-lead-modal');
 }
-
 function openEditLead(id){
   const l=state.leads.find(x=>x.id===id);if(!l)return;
   state.editLeadId=id;
@@ -592,10 +626,8 @@ function openEditLead(id){
   document.getElementById('lf-assigned').value=l.assigned_to||'';
   openModal('add-lead-modal');
 }
-
 async function saveLead(){
   const name=document.getElementById('lf-name').value.trim();if(!name){alert('Name is required');return;}
-  // For members, always assign to self
   const assignedTo = isAdmin()
     ? (document.getElementById('lf-assigned').value||null)
     : state.user.id;
@@ -612,9 +644,7 @@ async function saveLead(){
   }
   closeModal('add-lead-modal');await loadLeads();await loadActivities();renderLeads();renderDashboard();if(state.activeView==='pipeline')renderKanban();
 }
-
 async function deleteLead(id){if(!confirm('Delete this lead?'))return;await db.from('leads').delete().eq('id',id);document.getElementById('lead-detail-overlay').style.display='none';await loadLeads();renderLeads();renderDashboard();if(state.activeView==='pipeline')renderKanban();}
-
 async function openLeadDetail(id){
   const l=state.leads.find(x=>x.id===id);if(!l)return;
   const{data:acts}=await db.from('activities').select('*, user:profiles(name,avatar_initials)').eq('lead_id',id).order('created_at',{ascending:false});
@@ -622,12 +652,9 @@ async function openLeadDetail(id){
   const actsHtml=(acts||[]).map(a=>'<div class="activity-item"><div class="activity-dot '+a.type+'"></div><div class="activity-content"><div class="activity-text">'+(a.type==='comment'?'💬 ':'')+esc(a.text)+'</div><div class="activity-author">'+(a.user?.name||'System')+' · '+formatDateTime(a.created_at)+'</div></div></div>').join('')||'<div style="font-size:13px;color:var(--text-3)">No activity yet</div>';
   const stageButtons=STAGES.map(s=>'<button class="stage-switch-btn '+(l.stage===s?'active':'')+'" onclick="changeStageFromPanel(\''+l.id+'\',\''+s+'\')" style="'+(l.stage===s?'background:'+STAGE_COLORS[s]+';border-color:'+STAGE_COLORS[s]+';color:white':'')+'">'+s+'</button>').join('');
   const profileOpts=state.profiles.map(p=>'<option value="'+p.id+'" '+(p.id===l.assigned_to?'selected':'')+'>'+p.name+'</option>').join('');
-
-  // Assign section only for admin
   const assignSection = isAdmin()
     ? '<div class="panel-section"><div class="panel-section-title">Assign owner</div><div style="display:flex;gap:8px;align-items:center"><select id="assign-select" style="flex:1;padding:8px 10px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);background:var(--surface-2);color:var(--text-1);font-size:13px;outline:none"><option value="">Unassigned</option>'+profileOpts+'</select><button class="btn-primary" onclick="assignLead(\''+l.id+'\')">Assign</button></div></div>'
     : '';
-
   document.getElementById('lead-detail-panel').innerHTML=
     '<div class="panel-header"><div>'
     +'<div style="font-size:17px;font-weight:600">'+esc(l.name)+'</div>'
@@ -650,19 +677,14 @@ async function openLeadDetail(id){
     +'<div class="panel-section"><div class="panel-section-title">Activity & comments</div><div class="activity-list">'+actsHtml+'</div><div class="comment-composer"><textarea class="comment-input" id="comment-input-'+id+'" rows="2" placeholder="Add a comment or note…"></textarea><button class="btn-primary" style="align-self:flex-end" onclick="postComment(\''+l.id+'\')">Post</button></div></div>';
   document.getElementById('lead-detail-overlay').style.display='flex';
 }
-
 async function assignLead(leadId){const newOwner=document.getElementById('assign-select').value;const ownerName=state.profiles.find(p=>p.id===newOwner)?.name||'Unassigned';await db.from('leads').update({assigned_to:newOwner||null,updated_at:new Date().toISOString()}).eq('id',leadId);await db.from('activities').insert({lead_id:leadId,user_id:state.user.id,type:'edit',text:'Lead assigned to '+ownerName});await loadLeads();renderLeads();openLeadDetail(leadId);}
 async function changeStageFromPanel(leadId,stage){const old=state.leads.find(l=>l.id===leadId);await db.from('leads').update({stage,updated_at:new Date().toISOString()}).eq('id',leadId);await db.from('activities').insert({lead_id:leadId,user_id:state.user.id,type:'stage_change',text:'Stage changed from '+(old?.stage||'?')+' to '+stage});await loadLeads();await loadActivities();renderLeads();renderDashboard();if(state.activeView==='pipeline')renderKanban();openLeadDetail(leadId);}
 async function postComment(leadId){const inp=document.getElementById('comment-input-'+leadId);const text=inp?.value.trim();if(!text)return;await db.from('activities').insert({lead_id:leadId,user_id:state.user.id,type:'comment',text});inp.value='';await loadActivities();renderDashboard();openLeadDetail(leadId);}
-
 function renderKanban(){
-  // Scope kanban to visible leads
   const leadsPool = visibleLeads();
-  // Apply admin filter for pipeline
   const filteredPool = (isAdmin() && state.adminLeadFilter)
     ? leadsPool.filter(l => l.assigned_to === state.adminLeadFilter)
     : leadsPool;
-
   document.getElementById('kanban-board').innerHTML=STAGES.map(stage=>{
     const cards=filteredPool.filter(l=>l.stage===stage);
     return'<div class="kanban-col" data-stage="'+stage+'" ondragover="kanbanDragOver(event,this)" ondrop="kanbanDrop(event,\''+stage+'\')" ondragleave="kanbanDragLeave(this)">'
@@ -670,8 +692,6 @@ function renderKanban(){
       +'<div class="col-cards">'+cards.map(l=>'<div class="kanban-card" draggable="true" data-id="'+l.id+'" ondragstart="kanbanDragStart(event,\''+l.id+'\')" ondragend="kanbanDragEnd(event)" onclick="openLeadDetail(\''+l.id+'\')"><div class="kcard-name">'+esc(l.name)+'</div><div class="kcard-company">'+esc(l.company||'—')+'</div><div class="kcard-footer"><span class="kcard-value">'+(l.value?'₹'+(+l.value).toLocaleString('en-IN'):'')+'</span><span class="kcard-service">'+esc(l.service||'')+'</span></div></div>').join('')+'</div>'
       +'</div>';
   }).join('');
-
-  // Admin filter on pipeline
   if (isAdmin()) {
     const board = document.getElementById('kanban-board');
     let filterWrap = document.getElementById('kanban-admin-filter');
@@ -694,14 +714,12 @@ function renderKanban(){
     if (kanbanSel) kanbanSel.value = state.adminLeadFilter;
   }
 }
-
 let draggedLeadId=null;
 function kanbanDragStart(e,id){draggedLeadId=id;e.target.classList.add('dragging');e.dataTransfer.effectAllowed='move';}
 function kanbanDragEnd(e){e.target.classList.remove('dragging');}
 function kanbanDragOver(e,col){e.preventDefault();col.classList.add('drag-target');}
 function kanbanDragLeave(col){col.classList.remove('drag-target');}
 async function kanbanDrop(e,stage){e.preventDefault();document.querySelectorAll('.kanban-col').forEach(c=>c.classList.remove('drag-target'));if(!draggedLeadId)return;const old=state.leads.find(l=>l.id===draggedLeadId);if(old?.stage===stage)return;await db.from('leads').update({stage,updated_at:new Date().toISOString()}).eq('id',draggedLeadId);await db.from('activities').insert({lead_id:draggedLeadId,user_id:state.user.id,type:'stage_change',text:'Stage moved to '+stage+' via Kanban'});draggedLeadId=null;await loadLeads();renderKanban();renderDashboard();}
-
 function renderReminders(){
   const today=new Date().toISOString().split('T')[0];const filter=state.currentReminderFilter;
   let items=visibleReminders().filter(r=>{
@@ -714,14 +732,12 @@ function renderReminders(){
   list.innerHTML=items.length?items.map(r=>{const cls=r.done?'done':r.due_date<today?'overdue':r.due_date===today?'today':'upcoming';const icons={overdue:'⚠️',today:'📅',upcoming:'🔔',done:'✅'};return'<div class="reminder-item '+cls+'"><div class="rem-icon '+cls+'">'+icons[cls]+'</div><div class="rem-body"><div class="rem-title">'+esc(r.title)+'</div><div class="rem-meta">'+formatDate(r.due_date)+' at '+r.due_time+(r.lead?' · '+r.lead.name:'')+(r.assignee?' · '+r.assignee.name:'')+'</div>'+(r.notes?'<div class="rem-notes">'+esc(r.notes)+'</div>':'')+'<div class="rem-actions">'+(!r.done?'<button class="btn-sm" onclick="markReminderDone(\''+r.id+'\')">✓ Done</button>':'')+'<button class="btn-sm" onclick="openEditReminder(\''+r.id+'\')">Edit</button>'+(r.lead?'<button class="btn-sm" onclick="openLeadDetail(\''+r.lead_id+'\')">View lead</button>':'')+'<button class="btn-danger-sm" onclick="deleteReminder(\''+r.id+'\')">Delete</button></div></div></div>';}).join(''):'<div class="empty-state"><div class="empty-state-icon">🔔</div><div>No '+filter+' reminders</div></div>';
   document.querySelectorAll('.rem-tab').forEach(btn=>{btn.onclick=()=>{document.querySelectorAll('.rem-tab').forEach(b=>b.classList.remove('active'));btn.classList.add('active');state.currentReminderFilter=btn.dataset.filter;renderReminders();};});
 }
-
 function updateReminderBadge(){
   const today=new Date().toISOString().split('T')[0];
   const overdue=visibleReminders().filter(r=>!r.done&&r.due_date<=today).length;
   const badge=document.getElementById('reminder-count');
   if(overdue>0){badge.style.display='inline-block';badge.textContent=overdue;}else badge.style.display='none';
 }
-
 function openAddReminder(){
   state.editReminderId=null;
   document.getElementById('reminder-modal-title').textContent='Add reminder';
@@ -730,13 +746,11 @@ function openAddReminder(){
   document.getElementById('rf-notes').value='';
   document.getElementById('rf-date').value='';
   document.getElementById('rf-time').value='10:00';
-  // Populate lead select scoped to visible leads
   const leadsOpts = visibleLeads().map(l=>'<option value="'+l.id+'">'+esc(l.name)+' — '+esc(l.company||'')+'</option>').join('');
   document.getElementById('rf-lead').innerHTML='<option value="">— none —</option>'+leadsOpts;
   document.getElementById('rf-assigned').value=state.user.id||'';
   openModal('add-reminder-modal');
 }
-
 function openReminderForLead(leadId){openAddReminder();document.getElementById('rf-lead').value=leadId;document.getElementById('lead-detail-overlay').style.display='none';}
 function openEditReminder(id){
   const r=state.reminders.find(x=>x.id===id);if(!r)return;
@@ -752,7 +766,6 @@ function openEditReminder(id){
   document.getElementById('rf-assigned').value=r.assigned_to||'';
   openModal('add-reminder-modal');
 }
-
 async function saveReminder(){
   const title=document.getElementById('rf-title').value.trim();if(!title){alert('Title is required');return;}
   const date=document.getElementById('rf-date').value;if(!date){alert('Date is required');return;}
@@ -767,7 +780,6 @@ async function saveReminder(){
 }
 async function markReminderDone(id){await db.from('reminders').update({done:true}).eq('id',id);await loadReminders();renderReminders();}
 async function deleteReminder(id){if(!confirm('Delete this reminder?'))return;await db.from('reminders').delete().eq('id',id);await loadReminders();renderReminders();}
-
 let currentPopupReminder=null;
 function checkReminderPopups(){
   const now=new Date();const today=now.toISOString().split('T')[0];
@@ -789,16 +801,13 @@ function checkReminderPopups(){
 function closeToast(){document.getElementById('reminder-toast').style.display='none';}
 async function doneReminderToast(){if(currentPopupReminder)await markReminderDone(currentPopupReminder.id);closeToast();}
 function snoozeReminder(){if(!currentPopupReminder)return;const snooze=new Date(Date.now()+3600000);const r=currentPopupReminder;r._popupShown=false;r.due_date=snooze.toISOString().split('T')[0];r.due_time=String(snooze.getHours()).padStart(2,'0')+':'+String(snooze.getMinutes()).padStart(2,'0');db.from('reminders').update({due_date:r.due_date,due_time:r.due_time}).eq('id',r.id);closeToast();}
-
 async function sendReminderEmail(reminder,lead){if(!RESEND_API_KEY||RESEND_API_KEY==='YOUR_RESEND_API_KEY')return;const assignee=state.profiles.find(p=>p.id===reminder.assigned_to);if(!assignee?.email)return;const body='<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px"><div style="background:#4F46E5;color:white;padding:16px 24px;border-radius:8px 8px 0 0"><strong>Riddler CRM</strong> · Reminder</div><div style="background:#f8f7ff;padding:24px;border-radius:0 0 8px 8px;border:1px solid #e5e7eb"><h2 style="margin:0 0 12px;color:#1e1b4b">'+reminder.title+'</h2>'+(lead?'<p style="color:#4b5563"><strong>Lead:</strong> '+lead.name+(lead.company?' ('+lead.company+')':'')+'</p>':'')+(reminder.notes?'<p style="color:#4b5563"><strong>Notes:</strong> '+reminder.notes+'</p>':'')+'<p style="color:#9ca3af;font-size:12px;margin-top:16px">Due: '+formatDate(reminder.due_date)+' at '+reminder.due_time+'</p><a href="https://aayush-lang.github.io/Riddler-Media-Crm" style="display:inline-block;margin-top:16px;background:#4F46E5;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;font-size:13px">Open CRM</a></div></div>';await fetch('https://api.resend.com/emails',{method:'POST',headers:{'Authorization':'Bearer '+RESEND_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({from:FROM_EMAIL,to:[assignee.email],subject:'🔔 Reminder: '+reminder.title,html:body})});}
-
 function exportCSV(){
   const rows=visibleLeads().map(l=>[l.name,l.company,l.email,l.phone,l.stage,l.type,l.service,l.source,l.value,l.city,l.followup_date,l.created_at?.split('T')[0],l.notes].map(v=>'"'+(v||'').toString().replace(/"/g,'""')+'"').join(','));
   const headers=['Name','Company','Email','Phone','Stage','Type','Service','Source','Value','City','Follow-up Date','Created On','Notes'];
   const csv=[headers.join(','),...rows].join('\n');
   const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);a.download='riddler_leads_'+new Date().toISOString().split('T')[0]+'.csv';a.click();
 }
-
 function parseCSVLine(line){
   const cells=[];let cur='',inQ=false;
   for(let i=0;i<=line.length;i++){
@@ -811,7 +820,6 @@ function parseCSVLine(line){
   }
   return cells;
 }
-
 function importCSV(event){
   const file=event.target.files[0];if(!file)return;
   const reader=new FileReader();
@@ -828,7 +836,6 @@ function importCSV(event){
       type:(r[colIndex.type]||'').trim()==='Client'?'Client':'Prospect',
       service:(r[colIndex.service]!=null?r[colIndex.service]:'').trim(),source:(r[colIndex.source]!=null?r[colIndex.source]:'').trim(),value:+(r[colIndex.value]||0)||0,city:(r[colIndex.city]!=null?r[colIndex.city]:'').trim(),followup_date:(r[colIndex.followup_date]||'').trim()||null,notes:(r[colIndex.notes]!=null?r[colIndex.notes]:'').trim(),
       created_by:state.user.id,
-      // Auto-assign to current user on import
       assigned_to:state.user.id,
     }));
     if(!toInsert.length){alert('No valid rows found in CSV.');return;}
@@ -840,16 +847,13 @@ function importCSV(event){
   };
   reader.readAsText(file);event.target.value='';
 }
-
 async function inviteTeamMember(){const email=document.getElementById('invite-email').value.trim();if(!email)return;alert('Create their account from Supabase dashboard → Auth → Users → Invite user.\n\nEmail: '+email);document.getElementById('invite-email').value='';}
-
 function esc(str){return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function formatINR(n){if(n>=100000)return(n/100000).toFixed(1)+'L';if(n>=1000)return(n/1000).toFixed(0)+'K';return n.toLocaleString('en-IN');}
 function formatDate(dateStr){if(!dateStr)return'';const d=new Date(dateStr+'T00:00:00');return d.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});}
 function formatDateTime(isoStr){if(!isoStr)return'';return new Date(isoStr).toLocaleString('en-IN',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});}
-
 window.handleLogin=handleLogin;window.handleLogout=handleLogout;window.showForgot=showForgot;window.openModal=openModal;window.closeModal=closeModal;window.overlayClose=overlayClose;window.openAddLead=openAddLead;window.openEditLead=openEditLead;window.saveLead=saveLead;window.deleteLead=deleteLead;window.openLeadDetail=openLeadDetail;window.changeStageFromPanel=changeStageFromPanel;window.assignLead=assignLead;window.postComment=postComment;window.openAddReminder=openAddReminder;window.openReminderForLead=openReminderForLead;window.openEditReminder=openEditReminder;window.saveReminder=saveReminder;window.markReminderDone=markReminderDone;window.deleteReminder=deleteReminder;window.doneReminderToast=doneReminderToast;window.snoozeReminder=snoozeReminder;window.closeToast=closeToast;window.exportCSV=exportCSV;window.importCSV=importCSV;window.inviteTeamMember=inviteTeamMember;window.applyFilters=applyFilters;window.debounceFilter=debounceFilter;window.clearFilters=clearFilters;window.goPage=goPage;window.toggleSelect=toggleSelect;window.toggleSelectAll=toggleSelectAll;window.bulkMoveStage=bulkMoveStage;window.bulkDelete=bulkDelete;window.bulkReassign=bulkReassign;window.bulkAssignUnassigned=bulkAssignUnassigned;window.kanbanDragStart=kanbanDragStart;window.kanbanDragEnd=kanbanDragEnd;window.kanbanDragOver=kanbanDragOver;window.kanbanDragLeave=kanbanDragLeave;window.kanbanDrop=kanbanDrop;window.setDashPeriod=setDashPeriod;
-
+window.loadInbound=loadInbound;window.renderInbound=renderInbound;window.promoteInboundLead=promoteInboundLead;window.deleteInboundLead=deleteInboundLead;
 (async()=>{
   const{data:{session}}=await db.auth.getSession();
   if(session?.user){await initApp(session.user);}
