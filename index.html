@@ -169,6 +169,40 @@
           <div class="settings-card"><div class="settings-card-title">Lead sources</div><div id="sources-list"></div></div>
         </div>
       </section>
+      <section class="view" id="view-inbound">
+  <div class="view-header">
+    <div><h2 class="view-title">Inbound Leads</h2><p class="view-sub" id="inbound-count-label">Auto-captured from LinkedIn, Reddit, Google</p></div>
+    <button class="btn-secondary" onclick="loadInbound()">↻ Refresh</button>
+  </div>
+  <div class="filter-bar">
+    <select id="inbound-source-filter" class="filter-sel" onchange="renderInbound()">
+      <option value="">All sources</option>
+      <option value="linkedin">LinkedIn</option>
+      <option value="reddit">Reddit</option>
+      <option value="twitter">Twitter</option>
+      <option value="facebook">Facebook</option>
+      <option value="google">Google</option>
+    </select>
+    <select id="inbound-vertical-filter" class="filter-sel" onchange="renderInbound()">
+      <option value="">All verticals</option>
+      <option value="beauty">Beauty</option>
+      <option value="fashion">Fashion</option>
+      <option value="wellness">Wellness</option>
+      <option value="lifestyle">Lifestyle</option>
+      <option value="food">Food</option>
+      <option value="ecommerce">Ecommerce</option>
+      <option value="saas">SaaS</option>
+      <option value="other">Other</option>
+    </select>
+    <select id="inbound-score-filter" class="filter-sel" onchange="renderInbound()">
+      <option value="">All scores</option>
+      <option value="high">High (7+)</option>
+      <option value="mid">Mid (4-6)</option>
+      <option value="low">Low (0-3)</option>
+    </select>
+  </div>
+  <div id="inbound-list"></div>
+</section>
     </main>
   </div>
 
