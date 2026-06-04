@@ -11,6 +11,11 @@ const STAGE_COLORS = {
   'Brief Expected':'#F59E0B','Brief Received':'#F97316','Plan Shared':'#8B5CF6',
   'Closed':'#22C55E','Not Interested':'#EF4444','In House Team':'#64748B','DNP':'#DC2626'
 };
+
+// ── PER-TAB FILTER STATE ──
+// Each tab: { period: 'all'|'today'|'week'|'month'|'quarter'|'custom', from: 'YYYY-MM-DD'|null, to: 'YYYY-MM-DD'|null }
+const DEFAULT_TAB_FILTER = () => ({ period: 'all', from: null, to: null });
+
 let state = {
   user:null,profile:null,profiles:[],leads:[],filteredLeads:[],reminders:[],briefs:[],
   activities:[],inboundLeads:[],
@@ -23,8 +28,19 @@ let state = {
   adminBriefFilter: '',
   adminReminderFilter: '',
   adminDashFilter: '',
+  // Per-tab date filters
+  tabFilters: {
+    dashboard: DEFAULT_TAB_FILTER(),
+    leads: DEFAULT_TAB_FILTER(),
+    pipeline: DEFAULT_TAB_FILTER(),
+    briefs: DEFAULT_TAB_FILTER(),
+    inbound: DEFAULT_TAB_FILTER(),
+    reminders: DEFAULT_TAB_FILTER(),
+  }
 };
+
 let briefsModule = null;
+
 // ── HELPERS ──
 function isAdmin() { return state.profile?.role === 'admin'; }
 function visibleLeads() {
@@ -55,6 +71,108 @@ function dashLeads() {
   }
   return state.leads.filter(l => l.assigned_to === state.user.id);
 }
+
+// ── TAB DATE FILTER HELPERS ──
+function getTabRange(tab) {
+  const f = state.tabFilters[tab] || DEFAULT_TAB_FILTER();
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (f.period === 'custom') {
+    return { start: f.from ? f.from + 'T00:00:00' : null, end: f.to ? f.to + 'T23:59:59' : null };
+  }
+  if (f.period === 'today') return { start: today.toISOString(), end: null };
+  if (f.period === 'week') { const d = new Date(today); d.setDate(d.getDate()-d.getDay()); return { start: d.toISOString(), end: null }; }
+  if (f.period === 'month') return { start: new Date(now.getFullYear(), now.getMonth(), 1).toISOString(), end: null };
+  if (f.period === 'quarter') { const q = Math.floor(now.getMonth()/3); return { start: new Date(now.getFullYear(), q*3, 1).toISOString(), end: null }; }
+  return { start: null, end: null };
+}
+
+function applyTabFilter(items, dateField, tab) {
+  const { start, end } = getTabRange(tab);
+  if (!start && !end) return items;
+  return items.filter(i => {
+    const val = i[dateField];
+    if (!val) return false;
+    if (start && val < start) return false;
+    if (end && val > end) return false;
+    return true;
+  });
+}
+
+function setTabFilter(tab, period, from, to) {
+  state.tabFilters[tab] = { period, from: from||null, to: to||null };
+  if (tab === 'dashboard') renderDashboard();
+  else if (tab === 'leads') applyFilters();
+  else if (tab === 'pipeline') renderKanban();
+  else if (tab === 'briefs') briefsModule?.renderBriefs();
+  else if (tab === 'inbound') renderInbound();
+  else if (tab === 'reminders') renderReminders();
+}
+window.setTabFilter = setTabFilter;
+
+// ── TAB FILTER BAR HTML ──
+function tabFilterBarHtml(tab, label) {
+  const f = state.tabFilters[tab] || DEFAULT_TAB_FILTER();
+  const periods = ['today','week','month','quarter','all'];
+  const labels = { today:'Today', week:'This week', month:'This month', quarter:'This quarter', all:'All time' };
+  const customActive = f.period === 'custom';
+  let html = '<div class="tab-filter-bar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:1rem;padding:10px 0;border-bottom:1px solid var(--border)">';
+  if (label) html += '<span style="font-size:11px;color:var(--text-3);text-transform:uppercase;letter-spacing:0.5px;margin-right:4px">'+label+'</span>';
+  periods.forEach(p => {
+    html += '<button class="dash-period-btn '+(f.period===p?'active':'')+'" onclick="setTabFilter(\''+tab+'\',\''+p+'\',null,null)">'+labels[p]+'</button>';
+  });
+  html += '<button class="dash-period-btn '+(customActive?'active':'')+'" onclick="toggleCustomRange(\''+tab+'\')">Custom range</button>';
+  if (customActive || f.period === 'custom') {
+    html += '<div id="custom-range-'+tab+'" style="display:flex;align-items:center;gap:6px;margin-left:4px">'
+      + '<input type="date" value="'+(f.from||'')+'" style="padding:5px 8px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);font-size:12px;font-family:inherit;background:var(--surface-2);color:var(--text-1)" onchange="updateCustomFrom(\''+tab+'\',this.value)" />'
+      + '<span style="font-size:12px;color:var(--text-3)">to</span>'
+      + '<input type="date" value="'+(f.to||'')+'" style="padding:5px 8px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);font-size:12px;font-family:inherit;background:var(--surface-2);color:var(--text-1)" onchange="updateCustomTo(\''+tab+'\',this.value)" />'
+      + '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+window.toggleCustomRange = function(tab) {
+  const f = state.tabFilters[tab];
+  if (f.period === 'custom') { setTabFilter(tab, 'all', null, null); }
+  else { state.tabFilters[tab] = { period: 'custom', from: null, to: null }; refreshTabFilterBar(tab); }
+};
+
+window.updateCustomFrom = function(tab, val) {
+  state.tabFilters[tab].from = val;
+  state.tabFilters[tab].period = 'custom';
+  setTabFilter(tab, 'custom', val, state.tabFilters[tab].to);
+};
+
+window.updateCustomTo = function(tab, val) {
+  state.tabFilters[tab].to = val;
+  state.tabFilters[tab].period = 'custom';
+  setTabFilter(tab, 'custom', state.tabFilters[tab].from, val);
+};
+
+function refreshTabFilterBar(tab) {
+  const containerId = 'tab-filter-bar-' + tab;
+  const el = document.getElementById(containerId);
+  if (el) {
+    const label = el.dataset.label || '';
+    el.outerHTML = '<div id="' + containerId + '" data-label="' + label + '">' + tabFilterBarHtml(tab, label) + '</div>';
+  }
+}
+
+function injectTabFilterBar(containerId, tab, label) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  let wrap = document.getElementById('tab-filter-bar-' + tab);
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.id = 'tab-filter-bar-' + tab;
+    wrap.dataset.label = label || '';
+    el.parentNode.insertBefore(wrap, el);
+  }
+  wrap.innerHTML = tabFilterBarHtml(tab, label);
+}
+
 // ── AUTH ──
 async function handleLogin() {
   const email=document.getElementById('login-email').value.trim();
@@ -74,6 +192,7 @@ async function handleLogin() {
 async function handleLogout(){await db.auth.signOut();document.getElementById('app').style.display='none';document.getElementById('auth-screen').style.display='flex';state.user=null;}
 function showAuthError(msg){const el=document.getElementById('auth-error');el.textContent=msg;el.style.display='block';}
 function showForgot(){const email=prompt('Enter your registered email:');if(!email)return;db.auth.resetPasswordForEmail(email).then(()=>alert('Password reset email sent!'));}
+
 async function initApp(user) {
   state.user=user;
   const{data:prof}=await db.from('profiles').select('*').eq('id',user.id).single();
@@ -90,6 +209,8 @@ async function initApp(user) {
   const isPublic = await briefsModule.checkPublicShare();
   if(isPublic) return;
   injectAdminFilterBars();
+  // Inject tab filter bars
+  injectTabFilterBar('dash-period-filter', 'dashboard', '');
   document.querySelectorAll('.nav-btn').forEach(btn=>{btn.addEventListener('click',()=>switchView(btn.dataset.view,btn));});
   document.querySelectorAll('th.sortable').forEach(th=>{th.addEventListener('click',()=>handleSort(th.dataset.col));});
   document.getElementById('dash-date').textContent=new Date().toLocaleDateString('en-IN',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
@@ -102,6 +223,7 @@ async function initApp(user) {
     .on('postgres_changes',{event:'*',schema:'public',table:'leads_raw'},()=>loadInbound())
     .subscribe();
 }
+
 // ── ADMIN FILTER BARS ──
 function injectAdminFilterBars() {
   if (!isAdmin()) return;
@@ -153,7 +275,7 @@ function injectAdminFilterBars() {
     const card = document.createElement('div');
     card.className = 'settings-card';
     card.innerHTML = '<div class="settings-card-title">Bulk assign leads</div>'
-      + '<p style="font-size:12px;color:var(--text-2);margin-bottom:12px">Assign all unassigned leads to a team member in one click. This only affects leads with no current owner.</p>'
+      + '<p style="font-size:12px;color:var(--text-2);margin-bottom:12px">Assign all unassigned leads to a team member. Only affects leads with no current owner.</p>'
       + '<div style="display:flex;gap:8px;align-items:center">'
       + '<select id="bulk-assign-member" class="filter-sel" style="flex:1">'
       + state.profiles.filter(p=>p.id!==state.user.id).map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('')
@@ -164,27 +286,20 @@ function injectAdminFilterBars() {
     settingsGrid.appendChild(card);
   }
 }
-// ── BULK ASSIGN UNASSIGNED ──
+
 async function bulkAssignUnassigned() {
   const memberId = document.getElementById('bulk-assign-member').value;
   if (!memberId) return;
   const member = state.profiles.find(p => p.id === memberId);
   const unassigned = state.leads.filter(l => !l.assigned_to);
-  if (!unassigned.length) {
-    document.getElementById('bulk-assign-result').textContent = 'No unassigned leads found.';
-    return;
-  }
+  if (!unassigned.length) { document.getElementById('bulk-assign-result').textContent = 'No unassigned leads found.'; return; }
   if (!confirm('Assign ' + unassigned.length + ' unassigned leads to ' + (member?.name || 'selected member') + '?')) return;
   const { error } = await db.from('leads').update({ assigned_to: memberId, updated_at: new Date().toISOString() }).is('assigned_to', null);
-  if (error) {
-    document.getElementById('bulk-assign-result').textContent = 'Error: ' + error.message;
-    return;
-  }
+  if (error) { document.getElementById('bulk-assign-result').textContent = 'Error: ' + error.message; return; }
   document.getElementById('bulk-assign-result').textContent = '✓ Assigned ' + unassigned.length + ' leads to ' + (member?.name || 'member');
-  await loadLeads();
-  renderLeads();
-  renderDashboard();
+  await loadLeads(); renderLeads(); renderDashboard();
 }
+
 async function loadConfig(){const{data}=await db.from('config').select('*');if(data){data.forEach(row=>{state.config[row.key]=row.value;});}state.config.stages=STAGES;state.config.sources=SOURCES;populateSelects();}
 async function loadProfiles(){const{data}=await db.from('profiles').select('*').order('name');if(data)state.profiles=data;populateAssignedSelects();}
 async function loadLeads(){
@@ -215,20 +330,28 @@ async function loadInbound() {
 function updateInboundBadge() {
   const count = (state.inboundLeads || []).length;
   const badge = document.getElementById('inbound-count');
-  if (badge) {
-    if (count > 0) { badge.style.display = 'inline-block'; badge.textContent = count; }
-    else badge.style.display = 'none';
-  }
+  if (badge) { if (count > 0) { badge.style.display = 'inline-block'; badge.textContent = count; } else badge.style.display = 'none'; }
   const label = document.getElementById('inbound-count-label');
   if (label) label.textContent = count + ' leads auto-captured from LinkedIn, Reddit, Google';
 }
 
 function renderInbound() {
+  // Inject filter bar
+  const inboundHeader = document.querySelector('#view-inbound .filter-bar');
+  if (inboundHeader && !document.getElementById('tab-filter-bar-inbound')) {
+    const wrap = document.createElement('div');
+    wrap.id = 'tab-filter-bar-inbound';
+    inboundHeader.parentNode.insertBefore(wrap, inboundHeader);
+  }
+  const inboundWrap = document.getElementById('tab-filter-bar-inbound');
+  if (inboundWrap) inboundWrap.innerHTML = tabFilterBarHtml('inbound', '');
+
   const source = document.getElementById('inbound-source-filter')?.value || '';
   const vertical = document.getElementById('inbound-vertical-filter')?.value || '';
   const scoreRange = document.getElementById('inbound-score-filter')?.value || '';
 
-  let items = (state.inboundLeads || []).filter(l => {
+  let items = applyTabFilter(state.inboundLeads || [], 'created_at', 'inbound');
+  items = items.filter(l => {
     if (source && l.source !== source) return false;
     if (vertical && l.vertical !== vertical) return false;
     if (scoreRange === 'high' && (l.claude_score || 0) < 7) return false;
@@ -239,38 +362,22 @@ function renderInbound() {
 
   const list = document.getElementById('inbound-list');
   if (!list) return;
-
   if (!items.length) {
-    list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📡</div><div>No inbound leads yet. The pipeline runs 5x/day automatically.</div></div>';
+    list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📡</div><div>No inbound leads for this period.</div></div>';
     return;
   }
-
   list.innerHTML = items.map(l => {
     const score = l.claude_score || 0;
     const scoreColor = score >= 7 ? 'var(--green)' : score >= 4 ? 'var(--amber)' : 'var(--text-3)';
     const scoreBg = score >= 7 ? 'var(--green-light)' : score >= 4 ? 'var(--amber-light)' : 'var(--surface-2)';
     const sourceIcon = { linkedin: '💼', reddit: '🟠', twitter: '🐦', facebook: '👥', google: '🔍' }[l.source] || '🌐';
     const date = l.created_at ? new Date(l.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '';
-
     return '<div class="inbound-card">'
-      + '<div class="inbound-card-top">'
-      + '<div style="display:flex;align-items:center;gap:10px;flex:1">'
-      + '<span style="font-size:18px">' + sourceIcon + '</span>'
-      + '<div style="flex:1">'
-      + '<div style="font-size:13px;font-weight:500">' + esc(l.contact_name || 'Unknown') + (l.company ? ' · ' + esc(l.company) : '') + '</div>'
-      + '<div style="font-size:11px;color:var(--text-3);margin-top:2px">' + esc(l.source || '') + (l.vertical ? ' · ' + l.vertical : '') + ' · ' + date + '</div>'
-      + '</div>'
-      + '</div>'
-      + '<span style="background:' + scoreBg + ';color:' + scoreColor + ';font-size:12px;font-weight:600;padding:3px 10px;border-radius:12px;flex-shrink:0">' + score + '/10</span>'
-      + '</div>'
+      + '<div class="inbound-card-top"><div style="display:flex;align-items:center;gap:10px;flex:1"><span style="font-size:18px">' + sourceIcon + '</span><div style="flex:1"><div style="font-size:13px;font-weight:500">' + esc(l.contact_name || 'Unknown') + (l.company ? ' · ' + esc(l.company) : '') + '</div><div style="font-size:11px;color:var(--text-3);margin-top:2px">' + esc(l.source || '') + (l.vertical ? ' · ' + l.vertical : '') + ' · ' + date + '</div></div></div><span style="background:' + scoreBg + ';color:' + scoreColor + ';font-size:12px;font-weight:600;padding:3px 10px;border-radius:12px;flex-shrink:0">' + score + '/10</span></div>'
       + '<div style="font-size:12px;color:var(--text-2);margin:10px 0;line-height:1.5;padding:10px;background:var(--surface-2);border-radius:var(--radius-sm)">' + esc((l.text_snippet || '').slice(0, 200)) + ((l.text_snippet || '').length > 200 ? '…' : '') + '</div>'
       + (l.claude_reason ? '<div style="font-size:11px;color:var(--text-3);margin-bottom:8px">AI reason: ' + esc(l.claude_reason) + '</div>' : '')
       + (l.draft_message ? '<div style="font-size:12px;color:var(--purple);background:var(--purple-light);padding:10px;border-radius:var(--radius-sm);margin-bottom:10px;line-height:1.5"><strong>Draft outreach:</strong> ' + esc(l.draft_message) + '</div>' : '')
-      + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'
-      + (l.url ? '<a href="' + esc(l.url) + '" target="_blank" class="btn-sm">View post ↗</a>' : '')
-      + '<button class="btn-primary" style="font-size:12px;padding:5px 12px" onclick="promoteInboundLead(\'' + l.id + '\')">+ Add to CRM</button>'
-      + '<button class="btn-danger-sm" onclick="deleteInboundLead(\'' + l.id + '\')">Remove</button>'
-      + '</div>'
+      + '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' + (l.url ? '<a href="' + esc(l.url) + '" target="_blank" class="btn-sm">View post ↗</a>' : '') + '<button class="btn-primary" style="font-size:12px;padding:5px 12px" onclick="promoteInboundLead(\'' + l.id + '\')">+ Add to CRM</button><button class="btn-danger-sm" onclick="deleteInboundLead(\'' + l.id + '\')">Remove</button></div>'
       + '</div>';
   }).join('');
 }
@@ -278,25 +385,13 @@ function renderInbound() {
 async function promoteInboundLead(id) {
   const lead = (state.inboundLeads || []).find(l => l.id === id);
   if (!lead) return;
-  const payload = {
-    name: lead.contact_name || 'Unknown',
-    company: lead.company || '',
-    source: lead.source === 'linkedin' ? 'LinkedIn' : lead.source || 'Other',
-    stage: 'Fresh Lead',
-    type: 'Prospect',
-    notes: (lead.text_snippet || '').slice(0, 500) + (lead.draft_message ? '\n\nDraft outreach: ' + lead.draft_message : ''),
-    assigned_to: state.user.id,
-    created_by: state.user.id,
-  };
+  const payload = { name: lead.contact_name || 'Unknown', company: lead.company || '', source: lead.source === 'linkedin' ? 'LinkedIn' : lead.source || 'Other', stage: 'Fresh Lead', type: 'Prospect', notes: (lead.text_snippet || '').slice(0, 500) + (lead.draft_message ? '\n\nDraft outreach: ' + lead.draft_message : ''), assigned_to: state.user.id, created_by: state.user.id };
   const { data } = await db.from('leads').insert(payload).select().single();
   if (data) {
     await db.from('activities').insert({ lead_id: data.id, user_id: state.user.id, type: 'created', text: 'Promoted from inbound lead (' + (lead.source || 'auto') + ')' });
     await db.from('leads_raw').delete().eq('id', id);
     state.inboundLeads = (state.inboundLeads || []).filter(l => l.id !== id);
-    updateInboundBadge();
-    renderInbound();
-    await loadLeads();
-    renderDashboard();
+    updateInboundBadge(); renderInbound(); await loadLeads(); renderDashboard();
     alert('✓ Added to CRM as Fresh Lead');
   }
 }
@@ -305,10 +400,10 @@ async function deleteInboundLead(id) {
   if (!confirm('Remove this lead from inbound?')) return;
   await db.from('leads_raw').delete().eq('id', id);
   state.inboundLeads = (state.inboundLeads || []).filter(l => l.id !== id);
-  updateInboundBadge();
-  renderInbound();
+  updateInboundBadge(); renderInbound();
 }
 
+// ── DASHBOARD ──
 function getDashRange(period){
   const now=new Date();
   const today=new Date(now.getFullYear(),now.getMonth(),now.getDate());
@@ -319,37 +414,30 @@ function getDashRange(period){
   else if(period==='quarter'){const q=Math.floor(now.getMonth()/3);start=new Date(now.getFullYear(),q*3,1);}
   return start?start.toISOString():null;
 }
+
 function filterByPeriod(items,dateField,period){
   const start=getDashRange(period);
   if(!start)return items;
   return items.filter(i=>i[dateField]&&i[dateField]>=start);
 }
+
 function getChartBuckets(period){
-  const now=new Date();
-  const buckets=[];
-  if(period==='today'){
-    for(let h=0;h<24;h++)buckets.push({label:h+':00',key:String(h).padStart(2,'0')});
-  } else if(period==='week'){
-    const days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-    const start=new Date();start.setDate(start.getDate()-start.getDay());
-    for(let i=0;i<7;i++){const d=new Date(start);d.setDate(d.getDate()+i);buckets.push({label:days[d.getDay()],key:d.toISOString().split('T')[0]});}
-  } else if(period==='month'){
-    const dim=new Date(now.getFullYear(),now.getMonth()+1,0).getDate();
-    for(let d=1;d<=dim;d++)buckets.push({label:String(d),key:now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(d).padStart(2,'0')});
-  } else if(period==='quarter'){
-    const q=Math.floor(now.getMonth()/3);
-    for(let m=q*3;m<q*3+3;m++){const mn=new Date(now.getFullYear(),m,1).toLocaleDateString('en-IN',{month:'short'});buckets.push({label:mn,key:now.getFullYear()+'-'+String(m+1).padStart(2,'0')});}
-  } else {
-    for(let i=11;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);buckets.push({label:d.toLocaleDateString('en-IN',{month:'short',year:'2-digit'}),key:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')});}
-  }
+  const now=new Date(); const buckets=[];
+  if(period==='today'){ for(let h=0;h<24;h++)buckets.push({label:h+':00',key:String(h).padStart(2,'0')});
+  } else if(period==='week'){ const days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat']; const start=new Date();start.setDate(start.getDate()-start.getDay()); for(let i=0;i<7;i++){const d=new Date(start);d.setDate(d.getDate()+i);buckets.push({label:days[d.getDay()],key:d.toISOString().split('T')[0]});}
+  } else if(period==='month'){ const dim=new Date(now.getFullYear(),now.getMonth()+1,0).getDate(); for(let d=1;d<=dim;d++)buckets.push({label:String(d),key:now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(d).padStart(2,'0')});
+  } else if(period==='quarter'){ const q=Math.floor(now.getMonth()/3); for(let m=q*3;m<q*3+3;m++){const mn=new Date(now.getFullYear(),m,1).toLocaleDateString('en-IN',{month:'short'});buckets.push({label:mn,key:now.getFullYear()+'-'+String(m+1).padStart(2,'0')});}
+  } else { for(let i=11;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);buckets.push({label:d.toLocaleDateString('en-IN',{month:'short',year:'2-digit'}),key:d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')});} }
   return buckets;
 }
+
 function getItemKey(isoStr,period){
   if(!isoStr)return '';
   if(period==='today')return isoStr.substring(11,13);
   if(period==='week'||period==='month')return isoStr.substring(0,10);
   return isoStr.substring(0,7);
 }
+
 function renderBarChart(containerId,buckets,counts,color){
   const max=Math.max(...Object.values(counts),1);
   const container=document.getElementById(containerId);
@@ -357,81 +445,69 @@ function renderBarChart(containerId,buckets,counts,color){
   const showEvery=buckets.length>15?Math.ceil(buckets.length/10):1;
   let barsHtml='';
   for(let i=0;i<buckets.length;i++){
-    const b=buckets[i];
-    const val=counts[b.key]||0;
-    const h=max>0?Math.round((val/max)*90):0;
-    const showLabel=i%showEvery===0;
+    const b=buckets[i]; const val=counts[b.key]||0; const h=max>0?Math.round((val/max)*90):0; const showLabel=i%showEvery===0;
     const valLabel=val>0?'<span style="font-size:8px;color:var(--text-2);margin-bottom:2px">'+val+'</span>':'<span style="font-size:8px;color:transparent">0</span>';
-    barsHtml+='<div style="flex:1;display:flex;flex-direction:column;align-items:center;position:relative">'
-      +valLabel
-      +'<div title="'+b.label+': '+val+'" style="width:100%;background:'+color+';border-radius:3px 3px 0 0;height:'+h+'px;min-height:'+(val>0?'2':'0')+'px;transition:height 0.3s"></div>'
-      +'<span style="font-size:9px;color:var(--text-3);position:absolute;bottom:-18px;white-space:nowrap;'+(showLabel?'':'visibility:hidden')+'">'+b.label+'</span>'
-      +'</div>';
+    barsHtml+='<div style="flex:1;display:flex;flex-direction:column;align-items:center;position:relative">'+valLabel+'<div title="'+b.label+': '+val+'" style="width:100%;background:'+color+';border-radius:3px 3px 0 0;height:'+h+'px;min-height:'+(val>0?'2':'0')+'px;transition:height 0.3s"></div><span style="font-size:9px;color:var(--text-3);position:absolute;bottom:-18px;white-space:nowrap;'+(showLabel?'':'visibility:hidden')+'">'+b.label+'</span></div>';
   }
-  container.innerHTML=
-    '<div style="display:flex;gap:2px;margin-bottom:4px">'
-    +'<div style="width:24px;display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;padding-bottom:20px">'
-    +'<span style="font-size:9px;color:var(--text-3)">'+max+'</span>'
-    +'<span style="font-size:9px;color:var(--text-3)">'+Math.round(max/2)+'</span>'
-    +'<span style="font-size:9px;color:var(--text-3)">0</span>'
-    +'</div>'
-    +'<div style="flex:1;position:relative">'
-    +'<div style="position:absolute;top:0;left:0;right:0;bottom:20px;display:flex;flex-direction:column;justify-content:space-between;pointer-events:none">'
-    +'<div style="border-top:1px dashed var(--border);width:100%"></div>'
-    +'<div style="border-top:1px dashed var(--border);width:100%"></div>'
-    +'<div style="border-top:1px solid var(--border);width:100%"></div>'
-    +'</div>'
-    +'<div style="display:flex;align-items:flex-end;gap:3px;height:120px;padding-bottom:20px;position:relative">'
-    +barsHtml
-    +'</div></div></div>';
+  container.innerHTML='<div style="display:flex;gap:2px;margin-bottom:4px"><div style="width:24px;display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;padding-bottom:20px"><span style="font-size:9px;color:var(--text-3)">'+max+'</span><span style="font-size:9px;color:var(--text-3)">'+Math.round(max/2)+'</span><span style="font-size:9px;color:var(--text-3)">0</span></div><div style="flex:1;position:relative"><div style="position:absolute;top:0;left:0;right:0;bottom:20px;display:flex;flex-direction:column;justify-content:space-between;pointer-events:none"><div style="border-top:1px dashed var(--border);width:100%"></div><div style="border-top:1px dashed var(--border);width:100%"></div><div style="border-top:1px solid var(--border);width:100%"></div></div><div style="display:flex;align-items:flex-end;gap:3px;height:120px;padding-bottom:20px;position:relative">'+barsHtml+'</div></div></div>';
 }
+
 function renderDashboard(){
-  const period=state.dashPeriod;
+  const tf = state.tabFilters.dashboard;
+  const period = tf.period === 'custom' ? 'all' : tf.period;
   const allLeads=dashLeads();
-  const filteredLeads=filterByPeriod(allLeads,'created_at',period);
+  // Apply tab filter to leads (created_at for dashboard)
+  const filteredLeads = applyTabFilter(allLeads, 'created_at', 'dashboard');
   const visibleLeadIds = new Set(allLeads.map(l=>l.id));
   const allActivities = (state.activities||[]).filter(a => !a.lead_id || visibleLeadIds.has(a.lead_id));
-  const filteredActivities=filterByPeriod(allActivities,'created_at',period);
+  const filteredActivities = applyTabFilter(allActivities, 'created_at', 'dashboard');
   const followedUpLeadIds=new Set(filteredActivities.map(a=>a.lead_id).filter(Boolean));
   const followedUpCount=followedUpLeadIds.size;
   const won=filteredLeads.filter(l=>l.stage==='Closed');
   const totalVal=filteredLeads.reduce((s,l)=>s+(+l.value||0),0);
   const conv=filteredLeads.length?Math.round(won.length/filteredLeads.length*100):0;
   const today=new Date().toISOString().split('T')[0];
-  const periodLabels={today:'Today',week:'This week',month:'This month',quarter:'This quarter',all:'All time'};
+  const periodLabels={today:'Today',week:'This week',month:'This month',quarter:'This quarter',all:'All time',custom:'Custom range'};
+
   document.getElementById('metrics-row').innerHTML=
-    '<div class="metric-card"><div class="metric-label">Total leads</div><div class="metric-value purple">'+filteredLeads.length.toLocaleString('en-IN')+'</div><div class="metric-sub">'+periodLabels[period]+'</div></div>'
+    '<div class="metric-card"><div class="metric-label">Total leads</div><div class="metric-value purple">'+filteredLeads.length.toLocaleString('en-IN')+'</div><div class="metric-sub">'+periodLabels[tf.period]+'</div></div>'
     +'<div class="metric-card"><div class="metric-label">Followed up</div><div class="metric-value" style="color:var(--blue)">'+followedUpCount.toLocaleString('en-IN')+'</div><div class="metric-sub">Leads with activity</div></div>'
     +'<div class="metric-card"><div class="metric-label">Conversion rate</div><div class="metric-value green">'+conv+'%</div><div class="metric-sub">'+won.length+' closed</div></div>'
     +'<div class="metric-card"><div class="metric-label">Pipeline value</div><div class="metric-value amber">₹'+formatINR(totalVal)+'</div><div class="metric-sub">Estimated retainers</div></div>';
-  const filterEl=document.getElementById('dash-period-filter');
-  if(filterEl){
-    let tabsHtml='<div class="dash-period-tabs">';
-    ['today','week','month','quarter','all'].forEach(function(p){tabsHtml+='<button class="dash-period-btn '+(period===p?'active':'')+'" onclick="setDashPeriod(\''+p+'\')">'+periodLabels[p]+'</button>';});
-    tabsHtml+='</div>';
-    filterEl.innerHTML=tabsHtml;
-  }
+
+  // Render tab filter bar
+  const filterEl = document.getElementById('dash-period-filter');
+  if (filterEl) filterEl.innerHTML = tabFilterBarHtml('dashboard', '');
+
   const maxS=Math.max(...STAGES.map(s=>filteredLeads.filter(l=>l.stage===s).length),1);
   document.getElementById('stage-bars').innerHTML=STAGES.map(s=>{const c=filteredLeads.filter(l=>l.stage===s).length;return'<div class="stage-bar-row"><span class="stage-bar-label" style="width:110px">'+s+'</span><div class="stage-bar-track"><div class="stage-bar-fill" style="width:'+Math.round(c/maxS*100)+'%;background:'+STAGE_COLORS[s]+'"></div></div><span class="stage-bar-count">'+c+'</span></div>';}).join('');
+
   const srcMap={};filteredLeads.forEach(l=>{if(l.source){const src=l.source.trim();srcMap[src]=(srcMap[src]||0)+1;}});
   document.getElementById('source-chart').innerHTML=Object.entries(srcMap).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([s,c])=>'<div class="source-row"><span>'+s+'</span><span class="source-pill">'+c+'</span></div>').join('')||'<div class="empty-state">No source data yet</div>';
-  const buckets=getChartBuckets(period);
-  const createdCounts={};
-  buckets.forEach(b=>{createdCounts[b.key]=0;});
-  filteredLeads.forEach(l=>{const key=getItemKey(l.created_at,period);if(key in createdCounts)createdCounts[key]++;});
+
+  const chartPeriod = tf.period === 'custom' ? 'all' : period;
+  const buckets=getChartBuckets(chartPeriod);
+  const createdCounts={};buckets.forEach(b=>{createdCounts[b.key]=0;});
+  filteredLeads.forEach(l=>{const key=getItemKey(l.created_at,chartPeriod);if(key in createdCounts)createdCounts[key]++;});
   renderBarChart('leads-created-chart-inner',buckets,createdCounts,'#6366F1');
-  const followupCounts={};
-  const bucketLeadSets={};
+
+  const followupCounts={};const bucketLeadSets={};
   buckets.forEach(b=>{followupCounts[b.key]=0;bucketLeadSets[b.key]=new Set();});
-  filteredActivities.forEach(a=>{if(!a.lead_id)return;const key=getItemKey(a.created_at,period);if(key in bucketLeadSets)bucketLeadSets[key].add(a.lead_id);});
+  filteredActivities.forEach(a=>{if(!a.lead_id)return;const key=getItemKey(a.created_at,chartPeriod);if(key in bucketLeadSets)bucketLeadSets[key].add(a.lead_id);});
   buckets.forEach(b=>{followupCounts[b.key]=bucketLeadSets[b.key].size;});
   renderBarChart('leads-followup-chart-inner',buckets,followupCounts,'#10B981');
+
   const due=allLeads.filter(l=>l.followup_date===today);
   document.getElementById('followups-today').innerHTML=due.length?due.slice(0,5).map(l=>'<div class="followup-row"><div><div class="followup-name">'+l.name+'</div><div class="followup-company">'+(l.company||'')+'</div></div><button class="btn-sm" onclick="openLeadDetail(\''+l.id+'\')">View</button></div>').join(''):'<div class="empty-state"><div class="empty-state-icon">✓</div>No follow-ups today</div>';
+
   const perfMap={};filteredLeads.forEach(l=>{if(!l.assigned_to)return;const prof=state.profiles.find(p=>p.id===l.assigned_to);const name=prof?.name||'Unknown';if(!perfMap[name])perfMap[name]={total:0,won:0};perfMap[name].total++;if(l.stage==='Closed')perfMap[name].won++;});
   document.getElementById('team-perf').innerHTML=Object.entries(perfMap).sort((a,b)=>b[1].total-a[1].total).map(([name,p])=>'<div class="team-row"><span style="font-weight:500">'+name+'</span><div class="team-stats"><div class="team-stat"><div class="team-stat-num">'+p.total+'</div><div class="team-stat-lbl">Leads</div></div><div class="team-stat"><div class="team-stat-num">'+p.won+'</div><div class="team-stat-lbl">Closed</div></div><div class="team-stat"><div class="team-stat-num">'+(p.total?Math.round(p.won/p.total*100):0)+'%</div><div class="team-stat-lbl">Conv.</div></div></div></div>').join('')||'<div class="empty-state">Assign leads to see stats</div>';
 }
-function setDashPeriod(period){state.dashPeriod=period;renderDashboard();}
+
+// Keep old setDashPeriod for backward compat — now delegates to tab filter
+function setDashPeriod(period){setTabFilter('dashboard', period, null, null);}
+window.setDashPeriod = setDashPeriod;
+
 function populateSelects(){
   const svcs=state.config.services||[];
   const fsvc=document.getElementById('f-service');const fsrc=document.getElementById('f-source');const fstage=document.getElementById('f-stage');
@@ -446,47 +522,77 @@ function populateSelects(){
   if(svl)svl.innerHTML=svcs.map(s=>'<span class="config-tag">'+s+'</span>').join('');
   if(sol)sol.innerHTML=SOURCES.map(s=>'<span class="config-tag">'+s+'</span>').join('');
 }
+
 function populateAssignedSelects(){
   const opts=state.profiles.map(p=>'<option value="'+p.id+'">'+p.name+'</option>').join('');
   const emptyOpt='<option value="">Unassigned</option>';
   const fAssigned = document.getElementById('f-assigned');
   if (fAssigned) {
-    if (isAdmin()) {
-      fAssigned.innerHTML = '<option value="">All members</option>' + opts;
-      fAssigned.style.display = '';
-    } else {
-      fAssigned.style.display = 'none';
-    }
+    if (isAdmin()) { fAssigned.innerHTML = '<option value="">All members</option>' + opts; fAssigned.style.display = ''; }
+    else { fAssigned.style.display = 'none'; }
   }
   const rfAssigned = document.getElementById('rf-assigned');
   if (rfAssigned) {
-    if (isAdmin()) {
-      rfAssigned.innerHTML = emptyOpt + opts;
-    } else {
-      rfAssigned.innerHTML = '<option value="' + state.user.id + '">' + (state.profile?.name || 'Me') + '</option>';
-    }
+    if (isAdmin()) { rfAssigned.innerHTML = emptyOpt + opts; }
+    else { rfAssigned.innerHTML = '<option value="' + state.user.id + '">' + (state.profile?.name || 'Me') + '</option>'; }
   }
   const lfAssigned = document.getElementById('lf-assigned');
   if (lfAssigned) {
-    if (isAdmin()) {
-      lfAssigned.innerHTML = emptyOpt + opts;
-    } else {
-      lfAssigned.innerHTML = '<option value="' + state.user.id + '">' + (state.profile?.name || 'Me') + '</option>';
-    }
+    if (isAdmin()) { lfAssigned.innerHTML = emptyOpt + opts; }
+    else { lfAssigned.innerHTML = '<option value="' + state.user.id + '">' + (state.profile?.name || 'Me') + '</option>'; }
   }
   const tl=document.getElementById('team-list');
   if(tl)tl.innerHTML=state.profiles.map(p=>'<div class="team-member-row"><div class="tm-info"><div class="tm-avatar">'+(p.avatar_initials||'?')+'</div><div><div style="font-weight:500">'+p.name+'</div><div style="font-size:11px;color:var(--text-3)">'+p.email+'</div></div></div><span class="tm-role">'+p.role+'</span></div>').join('');
 }
+
 function switchView(viewName,btn){
   document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById('view-'+viewName)?.classList.add('active');
   btn?.classList.add('active');state.activeView=viewName;
   if(viewName==='pipeline')renderKanban();
-  if(viewName==='briefs'){briefsModule?.renderBriefs();}
-  if(viewName==='inbound'){renderInbound();}
+  if(viewName==='leads'){ injectLeadsFilterBar(); applyFilters(); }
+  if(viewName==='briefs'){ injectBriefsFilterBar(); briefsModule?.renderBriefs(); }
+  if(viewName==='inbound'){ renderInbound(); }
+  if(viewName==='reminders'){ injectRemindersFilterBar(); renderReminders(); }
   if(viewName==='settings'){loadProfiles().then(()=>populateAssignedSelects());}
 }
+
+function injectLeadsFilterBar() {
+  let wrap = document.getElementById('tab-filter-bar-leads');
+  const filterBar = document.querySelector('#view-leads .filter-bar');
+  if (!wrap && filterBar) {
+    wrap = document.createElement('div');
+    wrap.id = 'tab-filter-bar-leads';
+    filterBar.parentNode.insertBefore(wrap, filterBar);
+  }
+  if (wrap) wrap.innerHTML = tabFilterBarHtml('leads', '');
+}
+
+function injectBriefsFilterBar() {
+  const briefsList = document.getElementById('briefs-list');
+  if (!briefsList) return;
+  let wrap = document.getElementById('tab-filter-bar-briefs');
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.id = 'tab-filter-bar-briefs';
+    briefsList.parentNode.insertBefore(wrap, briefsList);
+  }
+  wrap.innerHTML = tabFilterBarHtml('briefs', '');
+}
+
+function injectRemindersFilterBar() {
+  const remTabs = document.querySelector('.reminder-tabs');
+  if (!remTabs) return;
+  let wrap = document.getElementById('tab-filter-bar-reminders');
+  if (!wrap) {
+    wrap = document.createElement('div');
+    wrap.id = 'tab-filter-bar-reminders';
+    remTabs.parentNode.insertBefore(wrap, remTabs);
+  }
+  wrap.innerHTML = tabFilterBarHtml('reminders', '');
+}
+
 function applyFilters(){
   const q=(document.getElementById('search-q')?.value||'').toLowerCase();
   const stage=document.getElementById('f-stage')?.value||'';
@@ -494,6 +600,11 @@ function applyFilters(){
   const service=document.getElementById('f-service')?.value||'';
   const source=document.getElementById('f-source')?.value||'';
   let base = visibleLeads();
+  // Apply tab date filter on updated_at
+  base = applyTabFilter(base, 'updated_at', 'leads');
+  // Update the leads filter bar
+  const wrap = document.getElementById('tab-filter-bar-leads');
+  if (wrap) wrap.innerHTML = tabFilterBarHtml('leads', '');
   state.filteredLeads=base.filter(l=>{
     if(q&&!(l.name+l.company+l.email+l.phone+l.city).toLowerCase().includes(q))return false;
     if(stage&&l.stage!==stage)return false;
@@ -507,13 +618,12 @@ function applyFilters(){
 function debounceFilter(){clearTimeout(state.filterDebounce);state.filterDebounce=setTimeout(applyFilters,250);}
 function clearFilters(){
   ['search-q','f-stage','f-type','f-service','f-source'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});
-  if(isAdmin()){
-    const fa=document.getElementById('f-assigned');if(fa)fa.value='';
-    state.adminLeadFilter='';
-  }
+  if(isAdmin()){const fa=document.getElementById('f-assigned');if(fa)fa.value='';state.adminLeadFilter='';}
+  state.tabFilters.leads = DEFAULT_TAB_FILTER();
   applyFilters();
 }
 function handleSort(col){if(state.sortCol===col){state.sortDir=state.sortDir==='asc'?'desc':'asc';}else{state.sortCol=col;state.sortDir='asc';}document.querySelectorAll('th.sortable').forEach(th=>{th.classList.remove('sort-asc','sort-desc');if(th.dataset.col===col)th.classList.add(state.sortDir==='asc'?'sort-asc':'sort-desc');});loadLeads().then(renderLeads);}
+
 function renderLeads(){
   const fl=state.filteredLeads;const total=fl.length;
   const pages=Math.max(1,Math.ceil(total/state.pageSize));
@@ -528,6 +638,7 @@ function renderLeads(){
       const fuClass=fu&&fu<today?'color:var(--red)':fu===today?'color:var(--amber)':'';
       const stageColor=STAGE_COLORS[l.stage]||'#6366F1';
       const createdDate=l.created_at?formatDate(l.created_at.split('T')[0]):'—';
+      const updatedDate=l.updated_at?formatDate(l.updated_at.split('T')[0]):'—';
       return'<tr data-id="'+l.id+'" class="'+(state.selectedLeads.has(l.id)?'selected':'')+'">'
         +'<td><input type="checkbox" '+(state.selectedLeads.has(l.id)?'checked':'')+' onchange="toggleSelect(\''+l.id+'\',this)"/></td>'
         +'<td><div class="lead-name">'+esc(l.name)+'</div><div class="lead-company">'+esc(l.company||'')+'</div></td>'
@@ -556,24 +667,21 @@ function renderLeads(){
   document.getElementById('select-all').checked=slice.length>0&&slice.every(l=>state.selectedLeads.has(l.id));
   renderBulkReassignBar();
 }
+
 function renderBulkReassignBar() {
   if (!isAdmin()) return;
   const bulk = document.getElementById('bulk-actions');
   if (!bulk) return;
   if (!document.getElementById('bulk-reassign-sel')) {
     const sel = document.createElement('select');
-    sel.id = 'bulk-reassign-sel';
-    sel.className = 'filter-sel';
-    sel.innerHTML = '<option value="">Reassign to…</option>' +
-      state.profiles.map(p => '<option value="' + p.id + '">' + esc(p.name) + '</option>').join('');
+    sel.id = 'bulk-reassign-sel'; sel.className = 'filter-sel';
+    sel.innerHTML = '<option value="">Reassign to…</option>' + state.profiles.map(p => '<option value="' + p.id + '">' + esc(p.name) + '</option>').join('');
     const applyBtn = document.createElement('button');
-    applyBtn.className = 'btn-secondary';
-    applyBtn.textContent = 'Reassign';
-    applyBtn.onclick = bulkReassign;
-    bulk.appendChild(sel);
-    bulk.appendChild(applyBtn);
+    applyBtn.className = 'btn-secondary'; applyBtn.textContent = 'Reassign'; applyBtn.onclick = bulkReassign;
+    bulk.appendChild(sel); bulk.appendChild(applyBtn);
   }
 }
+
 async function bulkReassign() {
   const memberId = document.getElementById('bulk-reassign-sel')?.value;
   if (!memberId || !state.selectedLeads.size) return;
@@ -581,19 +689,19 @@ async function bulkReassign() {
   if (!confirm('Reassign ' + state.selectedLeads.size + ' leads to ' + (member?.name || 'selected member') + '?')) return;
   const ids = [...state.selectedLeads];
   await db.from('leads').update({ assigned_to: memberId, updated_at: new Date().toISOString() }).in('id', ids);
-  state.selectedLeads.clear();
-  await loadLeads();
-  renderLeads();
-  renderDashboard();
+  state.selectedLeads.clear(); await loadLeads(); renderLeads(); renderDashboard();
 }
+
 function goPage(p){state.page=p;renderLeads();}
 function toggleSelect(id,cb){if(cb.checked)state.selectedLeads.add(id);else state.selectedLeads.delete(id);renderLeads();}
 function toggleSelectAll(cb){const fl=state.filteredLeads;const start=(state.page-1)*state.pageSize;const slice=fl.slice(start,start+state.pageSize);if(cb.checked)slice.forEach(l=>state.selectedLeads.add(l.id));else slice.forEach(l=>state.selectedLeads.delete(l.id));renderLeads();}
 async function bulkMoveStage(){const stage=document.getElementById('bulk-stage').value;if(!stage||!state.selectedLeads.size)return;const ids=[...state.selectedLeads];await db.from('leads').update({stage,updated_at:new Date().toISOString()}).in('id',ids);state.selectedLeads.clear();await loadLeads();renderLeads();renderDashboard();}
 async function bulkDelete(){if(!state.selectedLeads.size)return;if(!confirm('Delete '+state.selectedLeads.size+' leads?'))return;const ids=[...state.selectedLeads];await db.from('leads').delete().in('id',ids);state.selectedLeads.clear();await loadLeads();renderLeads();renderDashboard();}
+
 function openModal(id){document.getElementById(id).style.display='flex';}
 function closeModal(id){document.getElementById(id).style.display='none';}
 function overlayClose(e,el){if(e.target===el)el.style.display='none';}
+
 function openAddLead(){
   state.editLeadId=null;
   document.getElementById('lead-modal-title').textContent='Add new lead';
@@ -606,6 +714,7 @@ function openAddLead(){
   document.getElementById('lf-assigned').value=state.user?.id||'';
   openModal('add-lead-modal');
 }
+
 function openEditLead(id){
   const l=state.leads.find(x=>x.id===id);if(!l)return;
   state.editLeadId=id;
@@ -626,11 +735,10 @@ function openEditLead(id){
   document.getElementById('lf-assigned').value=l.assigned_to||'';
   openModal('add-lead-modal');
 }
+
 async function saveLead(){
   const name=document.getElementById('lf-name').value.trim();if(!name){alert('Name is required');return;}
-  const assignedTo = isAdmin()
-    ? (document.getElementById('lf-assigned').value||null)
-    : state.user.id;
+  const assignedTo = isAdmin() ? (document.getElementById('lf-assigned').value||null) : state.user.id;
   const payload={name,company:document.getElementById('lf-company').value,email:document.getElementById('lf-email').value,phone:document.getElementById('lf-phone').value,stage:document.getElementById('lf-stage').value,type:document.getElementById('lf-type').value,service:document.getElementById('lf-service').value,source:document.getElementById('lf-source').value,value:+document.getElementById('lf-value').value||0,city:document.getElementById('lf-city').value,notes:document.getElementById('lf-notes').value,followup_date:document.getElementById('lf-followup').value||null,assigned_to:assignedTo,updated_at:new Date().toISOString()};
   const editId=state.editLeadId;
   if(editId){
@@ -644,7 +752,9 @@ async function saveLead(){
   }
   closeModal('add-lead-modal');await loadLeads();await loadActivities();renderLeads();renderDashboard();if(state.activeView==='pipeline')renderKanban();
 }
+
 async function deleteLead(id){if(!confirm('Delete this lead?'))return;await db.from('leads').delete().eq('id',id);document.getElementById('lead-detail-overlay').style.display='none';await loadLeads();renderLeads();renderDashboard();if(state.activeView==='pipeline')renderKanban();}
+
 async function openLeadDetail(id){
   const l=state.leads.find(x=>x.id===id);if(!l)return;
   const{data:acts}=await db.from('activities').select('*, user:profiles(name,avatar_initials)').eq('lead_id',id).order('created_at',{ascending:false});
@@ -652,15 +762,9 @@ async function openLeadDetail(id){
   const actsHtml=(acts||[]).map(a=>'<div class="activity-item"><div class="activity-dot '+a.type+'"></div><div class="activity-content"><div class="activity-text">'+(a.type==='comment'?'💬 ':'')+esc(a.text)+'</div><div class="activity-author">'+(a.user?.name||'System')+' · '+formatDateTime(a.created_at)+'</div></div></div>').join('')||'<div style="font-size:13px;color:var(--text-3)">No activity yet</div>';
   const stageButtons=STAGES.map(s=>'<button class="stage-switch-btn '+(l.stage===s?'active':'')+'" onclick="changeStageFromPanel(\''+l.id+'\',\''+s+'\')" style="'+(l.stage===s?'background:'+STAGE_COLORS[s]+';border-color:'+STAGE_COLORS[s]+';color:white':'')+'">'+s+'</button>').join('');
   const profileOpts=state.profiles.map(p=>'<option value="'+p.id+'" '+(p.id===l.assigned_to?'selected':'')+'>'+p.name+'</option>').join('');
-  const assignSection = isAdmin()
-    ? '<div class="panel-section"><div class="panel-section-title">Assign owner</div><div style="display:flex;gap:8px;align-items:center"><select id="assign-select" style="flex:1;padding:8px 10px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);background:var(--surface-2);color:var(--text-1);font-size:13px;outline:none"><option value="">Unassigned</option>'+profileOpts+'</select><button class="btn-primary" onclick="assignLead(\''+l.id+'\')">Assign</button></div></div>'
-    : '';
+  const assignSection = isAdmin() ? '<div class="panel-section"><div class="panel-section-title">Assign owner</div><div style="display:flex;gap:8px;align-items:center"><select id="assign-select" style="flex:1;padding:8px 10px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);background:var(--surface-2);color:var(--text-1);font-size:13px;outline:none"><option value="">Unassigned</option>'+profileOpts+'</select><button class="btn-primary" onclick="assignLead(\''+l.id+'\')">Assign</button></div></div>' : '';
   document.getElementById('lead-detail-panel').innerHTML=
-    '<div class="panel-header"><div>'
-    +'<div style="font-size:17px;font-weight:600">'+esc(l.name)+'</div>'
-    +'<div style="font-size:13px;color:var(--text-3)">'+esc(l.company||'')+'</div>'
-    +'<div style="margin-top:8px"><span class="stage-badge" style="background:'+stageColor+'22;color:'+stageColor+'">'+l.stage+'</span></div>'
-    +'</div><button class="modal-close" onclick="document.getElementById(\'lead-detail-overlay\').style.display=\'none\'">✕</button></div>'
+    '<div class="panel-header"><div><div style="font-size:17px;font-weight:600">'+esc(l.name)+'</div><div style="font-size:13px;color:var(--text-3)">'+esc(l.company||'')+'</div><div style="margin-top:8px"><span class="stage-badge" style="background:'+stageColor+'22;color:'+stageColor+'">'+l.stage+'</span></div></div><button class="modal-close" onclick="document.getElementById(\'lead-detail-overlay\').style.display=\'none\'">✕</button></div>'
     +'<div class="panel-section"><div class="panel-section-title">Contact details</div><div class="info-grid">'
     +'<div class="info-field"><div class="info-label">Email</div><div class="info-value">'+esc(l.email||'—')+'</div></div>'
     +'<div class="info-field"><div class="info-label">Phone</div><div class="info-value">'+esc(l.phone||'—')+'</div></div>'
@@ -669,7 +773,7 @@ async function openLeadDetail(id){
     +'<div class="info-field"><div class="info-label">Source</div><div class="info-value">'+esc(l.source||'—')+'</div></div>'
     +'<div class="info-field"><div class="info-label">Deal value</div><div class="info-value" style="font-family:\'DM Mono\',monospace;color:var(--purple)">₹'+(+l.value||0).toLocaleString('en-IN')+'</div></div>'
     +'<div class="info-field"><div class="info-label">Follow-up</div><div class="info-value">'+(l.followup_date?formatDate(l.followup_date):'—')+'</div></div>'
-    +'<div class="info-field"><div class="info-label">Created on</div><div class="info-value">'+(l.created_at?formatDate(l.created_at.split('T')[0]):'—')+'</div></div>'
+    +'<div class="info-field"><div class="info-label">Last updated</div><div class="info-value">'+(l.updated_at?formatDate(l.updated_at.split('T')[0]):'—')+'</div></div>'
     +'</div>'+(l.notes?'<div style="margin-top:10px;font-size:13px;color:var(--text-2);background:var(--surface-2);padding:10px;border-radius:var(--radius-sm)">'+esc(l.notes)+'</div>':'')+'</div>'
     +'<div class="panel-section"><div class="panel-section-title">Move stage</div><div class="stage-switcher">'+stageButtons+'</div></div>'
     +assignSection
@@ -677,14 +781,37 @@ async function openLeadDetail(id){
     +'<div class="panel-section"><div class="panel-section-title">Activity & comments</div><div class="activity-list">'+actsHtml+'</div><div class="comment-composer"><textarea class="comment-input" id="comment-input-'+id+'" rows="2" placeholder="Add a comment or note…"></textarea><button class="btn-primary" style="align-self:flex-end" onclick="postComment(\''+l.id+'\')">Post</button></div></div>';
   document.getElementById('lead-detail-overlay').style.display='flex';
 }
+
 async function assignLead(leadId){const newOwner=document.getElementById('assign-select').value;const ownerName=state.profiles.find(p=>p.id===newOwner)?.name||'Unassigned';await db.from('leads').update({assigned_to:newOwner||null,updated_at:new Date().toISOString()}).eq('id',leadId);await db.from('activities').insert({lead_id:leadId,user_id:state.user.id,type:'edit',text:'Lead assigned to '+ownerName});await loadLeads();renderLeads();openLeadDetail(leadId);}
-async function changeStageFromPanel(leadId,stage){const old=state.leads.find(l=>l.id===leadId);await db.from('leads').update({stage,updated_at:new Date().toISOString()}).eq('id',leadId);await db.from('activities').insert({lead_id:leadId,user_id:state.user.id,type:'stage_change',text:'Stage changed from '+(old?.stage||'?')+' to '+stage});await loadLeads();await loadActivities();renderLeads();renderDashboard();if(state.activeView==='pipeline')renderKanban();openLeadDetail(leadId);}
+
+async function changeStageFromPanel(leadId,stage){
+  const old=state.leads.find(l=>l.id===leadId);
+  const now = new Date().toISOString();
+  await db.from('leads').update({stage, updated_at: now}).eq('id',leadId);
+  await db.from('activities').insert({lead_id:leadId,user_id:state.user.id,type:'stage_change',text:'Stage changed from '+(old?.stage||'?')+' to '+stage});
+  await loadLeads();await loadActivities();renderLeads();renderDashboard();
+  if(state.activeView==='pipeline')renderKanban();
+  openLeadDetail(leadId);
+}
+
 async function postComment(leadId){const inp=document.getElementById('comment-input-'+leadId);const text=inp?.value.trim();if(!text)return;await db.from('activities').insert({lead_id:leadId,user_id:state.user.id,type:'comment',text});inp.value='';await loadActivities();renderDashboard();openLeadDetail(leadId);}
+
 function renderKanban(){
+  // Inject pipeline filter bar
+  let pipeWrap = document.getElementById('tab-filter-bar-pipeline');
+  const board = document.getElementById('kanban-board');
+  if (!pipeWrap && board) {
+    pipeWrap = document.createElement('div');
+    pipeWrap.id = 'tab-filter-bar-pipeline';
+    board.parentNode.insertBefore(pipeWrap, board);
+  }
+  if (pipeWrap) pipeWrap.innerHTML = tabFilterBarHtml('pipeline', '');
+
   const leadsPool = visibleLeads();
-  const filteredPool = (isAdmin() && state.adminLeadFilter)
-    ? leadsPool.filter(l => l.assigned_to === state.adminLeadFilter)
-    : leadsPool;
+  // Pipeline filters on updated_at
+  let filteredPool = applyTabFilter(leadsPool, 'updated_at', 'pipeline');
+  if (isAdmin() && state.adminLeadFilter) filteredPool = filteredPool.filter(l => l.assigned_to === state.adminLeadFilter);
+
   document.getElementById('kanban-board').innerHTML=STAGES.map(stage=>{
     const cards=filteredPool.filter(l=>l.stage===stage);
     return'<div class="kanban-col" data-stage="'+stage+'" ondragover="kanbanDragOver(event,this)" ondrop="kanbanDrop(event,\''+stage+'\')" ondragleave="kanbanDragLeave(this)">'
@@ -692,37 +819,61 @@ function renderKanban(){
       +'<div class="col-cards">'+cards.map(l=>'<div class="kanban-card" draggable="true" data-id="'+l.id+'" ondragstart="kanbanDragStart(event,\''+l.id+'\')" ondragend="kanbanDragEnd(event)" onclick="openLeadDetail(\''+l.id+'\')"><div class="kcard-name">'+esc(l.name)+'</div><div class="kcard-company">'+esc(l.company||'—')+'</div><div class="kcard-footer"><span class="kcard-value">'+(l.value?'₹'+(+l.value).toLocaleString('en-IN'):'')+'</span><span class="kcard-service">'+esc(l.service||'')+'</span></div></div>').join('')+'</div>'
       +'</div>';
   }).join('');
+
   if (isAdmin()) {
-    const board = document.getElementById('kanban-board');
     let filterWrap = document.getElementById('kanban-admin-filter');
     if (!filterWrap) {
       filterWrap = document.createElement('div');
       filterWrap.id = 'kanban-admin-filter';
-      filterWrap.style.cssText = 'position:sticky;top:0;z-index:5;background:var(--bg);padding:8px 0 12px;display:flex;gap:8px;align-items:center';
-      filterWrap.innerHTML = '<span style="font-size:12px;color:var(--text-2)">Filter by:</span>'
-        + '<select id="kanban-member-sel" class="filter-sel" style="min-width:160px">'
-        + '<option value="">All members</option>'
-        + state.profiles.map(p => '<option value="' + p.id + '">' + esc(p.name) + '</option>').join('')
-        + '</select>';
-      board.parentNode.insertBefore(filterWrap, board);
-      document.getElementById('kanban-member-sel').addEventListener('change', function() {
-        state.adminLeadFilter = this.value;
-        renderKanban();
-      });
+      filterWrap.style.cssText = 'margin-bottom:12px;display:flex;gap:8px;align-items:center';
+      filterWrap.innerHTML = '<span style="font-size:12px;color:var(--text-2)">Filter by:</span><select id="kanban-member-sel" class="filter-sel" style="min-width:160px"><option value="">All members</option>'+state.profiles.map(p=>'<option value="'+p.id+'">'+esc(p.name)+'</option>').join('')+'</select>';
+      if (pipeWrap) pipeWrap.after(filterWrap); else board.parentNode.insertBefore(filterWrap, board);
+      document.getElementById('kanban-member-sel').addEventListener('change', function() { state.adminLeadFilter = this.value; renderKanban(); });
     }
     const kanbanSel = document.getElementById('kanban-member-sel');
     if (kanbanSel) kanbanSel.value = state.adminLeadFilter;
   }
 }
+
 let draggedLeadId=null;
 function kanbanDragStart(e,id){draggedLeadId=id;e.target.classList.add('dragging');e.dataTransfer.effectAllowed='move';}
 function kanbanDragEnd(e){e.target.classList.remove('dragging');}
 function kanbanDragOver(e,col){e.preventDefault();col.classList.add('drag-target');}
 function kanbanDragLeave(col){col.classList.remove('drag-target');}
-async function kanbanDrop(e,stage){e.preventDefault();document.querySelectorAll('.kanban-col').forEach(c=>c.classList.remove('drag-target'));if(!draggedLeadId)return;const old=state.leads.find(l=>l.id===draggedLeadId);if(old?.stage===stage)return;await db.from('leads').update({stage,updated_at:new Date().toISOString()}).eq('id',draggedLeadId);await db.from('activities').insert({lead_id:draggedLeadId,user_id:state.user.id,type:'stage_change',text:'Stage moved to '+stage+' via Kanban'});draggedLeadId=null;await loadLeads();renderKanban();renderDashboard();}
+async function kanbanDrop(e,stage){
+  e.preventDefault();
+  document.querySelectorAll('.kanban-col').forEach(c=>c.classList.remove('drag-target'));
+  if(!draggedLeadId)return;
+  const old=state.leads.find(l=>l.id===draggedLeadId);
+  if(old?.stage===stage)return;
+  const now = new Date().toISOString();
+  await db.from('leads').update({stage, updated_at: now}).eq('id',draggedLeadId);
+  await db.from('activities').insert({lead_id:draggedLeadId,user_id:state.user.id,type:'stage_change',text:'Stage moved to '+stage+' via Kanban'});
+  draggedLeadId=null;
+  await loadLeads();renderKanban();renderDashboard();
+}
+
 function renderReminders(){
-  const today=new Date().toISOString().split('T')[0];const filter=state.currentReminderFilter;
-  let items=visibleReminders().filter(r=>{
+  // Update filter bar
+  const wrap = document.getElementById('tab-filter-bar-reminders');
+  if (wrap) wrap.innerHTML = tabFilterBarHtml('reminders', '');
+
+  const today=new Date().toISOString().split('T')[0];
+  const filter=state.currentReminderFilter;
+  // Apply tab date filter on due_date (as date string)
+  let base = visibleReminders();
+  const tf = state.tabFilters.reminders;
+  if (tf.period !== 'all') {
+    base = base.filter(r => {
+      if (!r.due_date) return false;
+      const { start, end } = getTabRange('reminders');
+      const dueIso = r.due_date + 'T00:00:00';
+      if (start && dueIso < start) return false;
+      if (end && dueIso > end) return false;
+      return true;
+    });
+  }
+  let items=base.filter(r=>{
     if(filter==='done')return r.done;
     if(filter==='overdue')return!r.done&&r.due_date<today;
     if(filter==='today')return!r.done&&r.due_date===today;
@@ -732,6 +883,7 @@ function renderReminders(){
   list.innerHTML=items.length?items.map(r=>{const cls=r.done?'done':r.due_date<today?'overdue':r.due_date===today?'today':'upcoming';const icons={overdue:'⚠️',today:'📅',upcoming:'🔔',done:'✅'};return'<div class="reminder-item '+cls+'"><div class="rem-icon '+cls+'">'+icons[cls]+'</div><div class="rem-body"><div class="rem-title">'+esc(r.title)+'</div><div class="rem-meta">'+formatDate(r.due_date)+' at '+r.due_time+(r.lead?' · '+r.lead.name:'')+(r.assignee?' · '+r.assignee.name:'')+'</div>'+(r.notes?'<div class="rem-notes">'+esc(r.notes)+'</div>':'')+'<div class="rem-actions">'+(!r.done?'<button class="btn-sm" onclick="markReminderDone(\''+r.id+'\')">✓ Done</button>':'')+'<button class="btn-sm" onclick="openEditReminder(\''+r.id+'\')">Edit</button>'+(r.lead?'<button class="btn-sm" onclick="openLeadDetail(\''+r.lead_id+'\')">View lead</button>':'')+'<button class="btn-danger-sm" onclick="deleteReminder(\''+r.id+'\')">Delete</button></div></div></div>';}).join(''):'<div class="empty-state"><div class="empty-state-icon">🔔</div><div>No '+filter+' reminders</div></div>';
   document.querySelectorAll('.rem-tab').forEach(btn=>{btn.onclick=()=>{document.querySelectorAll('.rem-tab').forEach(b=>b.classList.remove('active'));btn.classList.add('active');state.currentReminderFilter=btn.dataset.filter;renderReminders();};});
 }
+
 function updateReminderBadge(){
   const today=new Date().toISOString().split('T')[0];
   const overdue=visibleReminders().filter(r=>!r.done&&r.due_date<=today).length;
@@ -769,9 +921,7 @@ function openEditReminder(id){
 async function saveReminder(){
   const title=document.getElementById('rf-title').value.trim();if(!title){alert('Title is required');return;}
   const date=document.getElementById('rf-date').value;if(!date){alert('Date is required');return;}
-  const assignedTo = isAdmin()
-    ? (document.getElementById('rf-assigned').value||null)
-    : state.user.id;
+  const assignedTo = isAdmin() ? (document.getElementById('rf-assigned').value||null) : state.user.id;
   const payload={title,lead_id:document.getElementById('rf-lead').value||null,assigned_to:assignedTo,due_date:date,due_time:document.getElementById('rf-time').value||'10:00',notes:document.getElementById('rf-notes').value,done:false};
   const editId=state.editReminderId;
   if(editId){await db.from('reminders').update(payload).eq('id',editId);}
@@ -780,16 +930,12 @@ async function saveReminder(){
 }
 async function markReminderDone(id){await db.from('reminders').update({done:true}).eq('id',id);await loadReminders();renderReminders();}
 async function deleteReminder(id){if(!confirm('Delete this reminder?'))return;await db.from('reminders').delete().eq('id',id);await loadReminders();renderReminders();}
+
 let currentPopupReminder=null;
 function checkReminderPopups(){
   const now=new Date();const today=now.toISOString().split('T')[0];
   const hhmm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
-  const due=visibleReminders().find(r=>{
-    if(r.done||r._popupShown)return false;
-    if(r.due_date>today)return false;
-    if(r.due_date<today)return true;
-    return r.due_time<=hhmm;
-  });
+  const due=visibleReminders().find(r=>{if(r.done||r._popupShown)return false;if(r.due_date>today)return false;if(r.due_date<today)return true;return r.due_time<=hhmm;});
   if(!due)return;
   due._popupShown=true;currentPopupReminder=due;
   const lead=state.leads.find(l=>l.id===due.lead_id);
@@ -801,13 +947,16 @@ function checkReminderPopups(){
 function closeToast(){document.getElementById('reminder-toast').style.display='none';}
 async function doneReminderToast(){if(currentPopupReminder)await markReminderDone(currentPopupReminder.id);closeToast();}
 function snoozeReminder(){if(!currentPopupReminder)return;const snooze=new Date(Date.now()+3600000);const r=currentPopupReminder;r._popupShown=false;r.due_date=snooze.toISOString().split('T')[0];r.due_time=String(snooze.getHours()).padStart(2,'0')+':'+String(snooze.getMinutes()).padStart(2,'0');db.from('reminders').update({due_date:r.due_date,due_time:r.due_time}).eq('id',r.id);closeToast();}
+
 async function sendReminderEmail(reminder,lead){if(!RESEND_API_KEY||RESEND_API_KEY==='YOUR_RESEND_API_KEY')return;const assignee=state.profiles.find(p=>p.id===reminder.assigned_to);if(!assignee?.email)return;const body='<div style="font-family:sans-serif;max-width:520px;margin:0 auto;padding:24px"><div style="background:#4F46E5;color:white;padding:16px 24px;border-radius:8px 8px 0 0"><strong>Riddler CRM</strong> · Reminder</div><div style="background:#f8f7ff;padding:24px;border-radius:0 0 8px 8px;border:1px solid #e5e7eb"><h2 style="margin:0 0 12px;color:#1e1b4b">'+reminder.title+'</h2>'+(lead?'<p style="color:#4b5563"><strong>Lead:</strong> '+lead.name+(lead.company?' ('+lead.company+')':'')+'</p>':'')+(reminder.notes?'<p style="color:#4b5563"><strong>Notes:</strong> '+reminder.notes+'</p>':'')+'<p style="color:#9ca3af;font-size:12px;margin-top:16px">Due: '+formatDate(reminder.due_date)+' at '+reminder.due_time+'</p><a href="https://aayush-lang.github.io/Riddler-Media-Crm" style="display:inline-block;margin-top:16px;background:#4F46E5;color:white;padding:10px 20px;border-radius:6px;text-decoration:none;font-size:13px">Open CRM</a></div></div>';await fetch('https://api.resend.com/emails',{method:'POST',headers:{'Authorization':'Bearer '+RESEND_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({from:FROM_EMAIL,to:[assignee.email],subject:'🔔 Reminder: '+reminder.title,html:body})});}
+
 function exportCSV(){
   const rows=visibleLeads().map(l=>[l.name,l.company,l.email,l.phone,l.stage,l.type,l.service,l.source,l.value,l.city,l.followup_date,l.created_at?.split('T')[0],l.notes].map(v=>'"'+(v||'').toString().replace(/"/g,'""')+'"').join(','));
   const headers=['Name','Company','Email','Phone','Stage','Type','Service','Source','Value','City','Follow-up Date','Created On','Notes'];
   const csv=[headers.join(','),...rows].join('\n');
   const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);a.download='riddler_leads_'+new Date().toISOString().split('T')[0]+'.csv';a.click();
 }
+
 function parseCSVLine(line){
   const cells=[];let cur='',inQ=false;
   for(let i=0;i<=line.length;i++){
@@ -820,6 +969,7 @@ function parseCSVLine(line){
   }
   return cells;
 }
+
 function importCSV(event){
   const file=event.target.files[0];if(!file)return;
   const reader=new FileReader();
@@ -835,8 +985,7 @@ function importCSV(event){
       stage:STAGES.includes((r[colIndex.stage]||'').trim())?(r[colIndex.stage]||'').trim():'Fresh Lead',
       type:(r[colIndex.type]||'').trim()==='Client'?'Client':'Prospect',
       service:(r[colIndex.service]!=null?r[colIndex.service]:'').trim(),source:(r[colIndex.source]!=null?r[colIndex.source]:'').trim(),value:+(r[colIndex.value]||0)||0,city:(r[colIndex.city]!=null?r[colIndex.city]:'').trim(),followup_date:(r[colIndex.followup_date]||'').trim()||null,notes:(r[colIndex.notes]!=null?r[colIndex.notes]:'').trim(),
-      created_by:state.user.id,
-      assigned_to:state.user.id,
+      created_by:state.user.id,assigned_to:state.user.id,
     }));
     if(!toInsert.length){alert('No valid rows found in CSV.');return;}
     if(!confirm('Import '+toInsert.length+' leads?'))return;
@@ -847,13 +996,16 @@ function importCSV(event){
   };
   reader.readAsText(file);event.target.value='';
 }
+
 async function inviteTeamMember(){const email=document.getElementById('invite-email').value.trim();if(!email)return;alert('Create their account from Supabase dashboard → Auth → Users → Invite user.\n\nEmail: '+email);document.getElementById('invite-email').value='';}
+
 function esc(str){return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function formatINR(n){if(n>=100000)return(n/100000).toFixed(1)+'L';if(n>=1000)return(n/1000).toFixed(0)+'K';return n.toLocaleString('en-IN');}
 function formatDate(dateStr){if(!dateStr)return'';const d=new Date(dateStr+'T00:00:00');return d.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});}
 function formatDateTime(isoStr){if(!isoStr)return'';return new Date(isoStr).toLocaleString('en-IN',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'});}
-window.handleLogin=handleLogin;window.handleLogout=handleLogout;window.showForgot=showForgot;window.openModal=openModal;window.closeModal=closeModal;window.overlayClose=overlayClose;window.openAddLead=openAddLead;window.openEditLead=openEditLead;window.saveLead=saveLead;window.deleteLead=deleteLead;window.openLeadDetail=openLeadDetail;window.changeStageFromPanel=changeStageFromPanel;window.assignLead=assignLead;window.postComment=postComment;window.openAddReminder=openAddReminder;window.openReminderForLead=openReminderForLead;window.openEditReminder=openEditReminder;window.saveReminder=saveReminder;window.markReminderDone=markReminderDone;window.deleteReminder=deleteReminder;window.doneReminderToast=doneReminderToast;window.snoozeReminder=snoozeReminder;window.closeToast=closeToast;window.exportCSV=exportCSV;window.importCSV=importCSV;window.inviteTeamMember=inviteTeamMember;window.applyFilters=applyFilters;window.debounceFilter=debounceFilter;window.clearFilters=clearFilters;window.goPage=goPage;window.toggleSelect=toggleSelect;window.toggleSelectAll=toggleSelectAll;window.bulkMoveStage=bulkMoveStage;window.bulkDelete=bulkDelete;window.bulkReassign=bulkReassign;window.bulkAssignUnassigned=bulkAssignUnassigned;window.kanbanDragStart=kanbanDragStart;window.kanbanDragEnd=kanbanDragEnd;window.kanbanDragOver=kanbanDragOver;window.kanbanDragLeave=kanbanDragLeave;window.kanbanDrop=kanbanDrop;window.setDashPeriod=setDashPeriod;
-window.loadInbound=loadInbound;window.renderInbound=renderInbound;window.promoteInboundLead=promoteInboundLead;window.deleteInboundLead=deleteInboundLead;
+
+window.handleLogin=handleLogin;window.handleLogout=handleLogout;window.showForgot=showForgot;window.openModal=openModal;window.closeModal=closeModal;window.overlayClose=overlayClose;window.openAddLead=openAddLead;window.openEditLead=openEditLead;window.saveLead=saveLead;window.deleteLead=deleteLead;window.openLeadDetail=openLeadDetail;window.changeStageFromPanel=changeStageFromPanel;window.assignLead=assignLead;window.postComment=postComment;window.openAddReminder=openAddReminder;window.openReminderForLead=openReminderForLead;window.openEditReminder=openEditReminder;window.saveReminder=saveReminder;window.markReminderDone=markReminderDone;window.deleteReminder=deleteReminder;window.doneReminderToast=doneReminderToast;window.snoozeReminder=snoozeReminder;window.closeToast=closeToast;window.exportCSV=exportCSV;window.importCSV=importCSV;window.inviteTeamMember=inviteTeamMember;window.applyFilters=applyFilters;window.debounceFilter=debounceFilter;window.clearFilters=clearFilters;window.goPage=goPage;window.toggleSelect=toggleSelect;window.toggleSelectAll=toggleSelectAll;window.bulkMoveStage=bulkMoveStage;window.bulkDelete=bulkDelete;window.bulkReassign=bulkReassign;window.bulkAssignUnassigned=bulkAssignUnassigned;window.kanbanDragStart=kanbanDragStart;window.kanbanDragEnd=kanbanDragEnd;window.kanbanDragOver=kanbanDragOver;window.kanbanDragLeave=kanbanDragLeave;window.kanbanDrop=kanbanDrop;window.setDashPeriod=setDashPeriod;window.loadInbound=loadInbound;window.renderInbound=renderInbound;window.promoteInboundLead=promoteInboundLead;window.deleteInboundLead=deleteInboundLead;
+
 (async()=>{
   const{data:{session}}=await db.auth.getSession();
   if(session?.user){await initApp(session.user);}
