@@ -293,3 +293,6 @@ body { font-family: 'DM Sans', system-ui, sans-serif; font-size: 14px; color: va
 .metric-value.blue { color: var(--blue); }
 .inbound-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; margin-bottom: 12px; box-shadow: var(--shadow); }
 .inbound-card-top { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; }
+
+/* ── TAB FILTER BAR ── */
+.tab-filter-bar { display:flex; align-items:center; gap:6px; flex-wrap:wrap; margin-bottom:1rem; padding:10px 0; border-bottom:1px solid var(--border); }
