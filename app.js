@@ -104,7 +104,7 @@ function setTabFilter(tab, period, from, to) {
   if (tab === 'dashboard') renderDashboard();
   else if (tab === 'leads') applyFilters();
   else if (tab === 'pipeline') renderKanban();
-  else if (tab === 'briefs') briefsModule?.renderBriefs();
+  else if (tab === 'briefs') { injectBriefsFilterBar(); briefsModule?.renderBriefs(); }
   else if (tab === 'inbound') renderInbound();
   else if (tab === 'reminders') renderReminders();
 }
@@ -136,7 +136,11 @@ function tabFilterBarHtml(tab, label) {
 window.toggleCustomRange = function(tab) {
   const f = state.tabFilters[tab];
   if (f.period === 'custom') { setTabFilter(tab, 'all', null, null); }
-  else { state.tabFilters[tab] = { period: 'custom', from: null, to: null }; refreshTabFilterBar(tab); }
+  else {
+    state.tabFilters[tab] = { period: 'custom', from: null, to: null };
+    if (tab === 'dashboard') renderDashboard();
+    else refreshTabFilterBar(tab);
+  }
 };
 
 window.updateCustomFrom = function(tab, val) {
@@ -203,14 +207,12 @@ async function initApp(user) {
   document.getElementById('app').style.display='flex';
   await Promise.all([loadConfig(),loadProfiles(),loadLeads(),loadReminders(),loadActivities(),loadInbound()]);
   renderDashboard();renderLeads();renderReminders();
-  briefsModule = initBriefs(db, state, esc, formatDate, isAdmin, visibleBriefs);
+  briefsModule = initBriefs(db, state, esc, formatDate, isAdmin, visibleBriefs, applyTabFilter);
   await briefsModule.loadBriefs();
   briefsModule.renderBriefs();
   const isPublic = await briefsModule.checkPublicShare();
   if(isPublic) return;
   injectAdminFilterBars();
-  // Inject tab filter bars
-  injectTabFilterBar('dash-period-filter', 'dashboard', '');
   document.querySelectorAll('.nav-btn').forEach(btn=>{btn.addEventListener('click',()=>switchView(btn.dataset.view,btn));});
   document.querySelectorAll('th.sortable').forEach(th=>{th.addEventListener('click',()=>handleSort(th.dataset.col));});
   document.getElementById('dash-date').textContent=new Date().toLocaleDateString('en-IN',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
