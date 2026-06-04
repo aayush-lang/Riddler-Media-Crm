@@ -4,7 +4,7 @@
 //  Role-aware: members see own briefs, admin sees all
 // ============================================================
 
-export function initBriefs(db, state, esc, formatDate, isAdmin, visibleBriefs) {
+export function initBriefs(db, state, esc, formatDate, isAdmin, visibleBriefs, applyTabFilter) {
 
   // ── LOAD BRIEFS ──
   async function loadBriefs() {
@@ -16,7 +16,10 @@ export function initBriefs(db, state, esc, formatDate, isAdmin, visibleBriefs) {
   function renderBriefs() {
     const list = document.getElementById('briefs-list');
     if (!list) return;
-    const briefs = visibleBriefs();
+    let briefs = visibleBriefs();
+    if (typeof applyTabFilter === 'function') {
+      briefs = applyTabFilter(briefs, 'created_at', 'briefs');
+    }
     if (!briefs?.length) {
       list.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📋</div><div>No briefs yet. Create one from a lead or click "+ New brief".</div></div>';
       return;
